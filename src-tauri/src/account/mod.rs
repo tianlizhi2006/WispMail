@@ -6,15 +6,19 @@
 //! - 管理多账户的添加、编辑、删除。
 //! - 对接系统凭据管理器安全存储密码 / 授权码 / OAuth 令牌。
 //!
-//! 后续将引入 `keyring` 存储凭据、`oauth2` 处理授权登录。
+//! 凭据通过系统凭据管理器保存，账户配置独立保存于 SQLite。
 //!
 //! 序列化约定：结构体字段以 camelCase 传给前端，与 `src/lib/types.ts` 保持一致。
 
+pub mod credentials;
 pub mod providers;
+pub mod service;
+mod validation;
 
 use serde::{Deserialize, Serialize};
 
 pub use providers::{DiscoveredConfig, autodiscover};
+pub use service::AccountService;
 
 /// 收发信使用的加密方式。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -56,7 +60,7 @@ pub enum IncomingProtocol {
 }
 
 /// 一个邮箱账户的完整配置。凭据本身不在此结构中，另存于系统凭据管理器。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Account {
     /// 本地唯一标识。
@@ -65,10 +69,77 @@ pub struct Account {
     pub email: String,
     /// 显示名称（发件人姓名）。
     pub display_name: String,
+    /// 登录名可与邮箱地址不同；旧配置缺省时仍使用邮箱地址。
+    #[serde(default)]
+    pub incoming_username: String,
+    #[serde(default)]
+    pub outgoing_username: String,
+    #[serde(default = "default_use_same_password")]
+    pub use_same_password: bool,
     pub incoming_protocol: IncomingProtocol,
     pub incoming: ServerConfig,
     pub outgoing: ServerConfig,
     pub auth: AuthMethod,
+}
+
+fn default_use_same_password() -> bool {
+    true
+}
+
+impl Account {
+    pub fn incoming_login(&self) -> &str {
+        if self.incoming_username.trim().is_empty() {
+            &self.email
+        } else {
+            &self.incoming_username
+        }
+    }
+
+    pub fn outgoing_login(&self) -> &str {
+        if self.outgoing_username.trim().is_empty() {
+            &self.email
+        } else {
+            &self.outgoing_username
+        }
+    }
+
+    /// 仅在内存中补齐旧配置，读取账户不会触发迁移或改写凭据。
+    pub(crate) fn normalize_usernames(&mut self) {
+        if self.incoming_username.trim().is_empty() {
+            self.incoming_username = self.email.clone();
+        }
+        if self.outgoing_username.trim().is_empty() {
+            self.outgoing_username = self.email.clone();
+        }
+    }
+}
+
+/// 仅在后端验证与凭据保存期间存在；禁止序列化或调试输出。
+pub struct AccountCredentials {
+    pub incoming_password: String,
+    pub outgoing_password: String,
+}
+
+/// 添加或编辑账户的请求。密码只用于验证连接并交给系统凭据管理器。
+/// 编辑时不传密码或传空字符串表示保留原凭据。
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountInput {
+    pub id: Option<String>,
+    pub email: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub incoming_username: String,
+    #[serde(default)]
+    pub outgoing_username: String,
+    #[serde(default = "default_use_same_password")]
+    pub use_same_password: bool,
+    pub incoming_protocol: IncomingProtocol,
+    pub incoming: ServerConfig,
+    pub outgoing: ServerConfig,
+    pub auth: AuthMethod,
+    pub password: Option<String>,
+    pub outgoing_password: Option<String>,
 }
 
 #[cfg(test)]
@@ -82,6 +153,9 @@ mod tests {
             id: "1".into(),
             email: "a@example.com".into(),
             display_name: "A".into(),
+            incoming_username: "CORP\\alice".into(),
+            outgoing_username: "smtp-alice".into(),
+            use_same_password: false,
             incoming_protocol: IncomingProtocol::Imap,
             incoming: ServerConfig {
                 host: "imap.example.com".into(),
@@ -99,6 +173,27 @@ mod tests {
         assert_eq!(json["displayName"], "A");
         assert_eq!(json["incomingProtocol"], "imap");
         assert_eq!(json["auth"], "oauth2");
+        assert_eq!(json["incomingUsername"], "CORP\\alice");
+        assert_eq!(json["outgoingUsername"], "smtp-alice");
+        assert_eq!(json["useSamePassword"], false);
         assert_eq!(json["outgoing"]["encryption"], "starttls");
+    }
+
+    #[test]
+    fn legacy_json_defaults_to_email_and_shared_credentials() {
+        let legacy = serde_json::json!({
+            "id": "legacy", "email": "a@example.com", "displayName": "A",
+            "incomingProtocol": "imap", "auth": "password",
+            "incoming": {"host": "mail.example.com", "port": 993, "encryption": "tls"},
+            "outgoing": {"host": "mail.example.com", "port": 587, "encryption": "starttls"}
+        });
+        let account: Account = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(account.use_same_password);
+        assert_eq!(account.incoming_login(), "a@example.com");
+        assert_eq!(account.outgoing_login(), "a@example.com");
+        let input: AccountInput = serde_json::from_value(legacy).unwrap();
+        assert!(input.use_same_password);
+        assert!(input.incoming_username.is_empty());
+        assert!(input.outgoing_password.is_none());
     }
 }

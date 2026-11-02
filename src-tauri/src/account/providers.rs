@@ -151,12 +151,7 @@ fn server((host, port, encryption): (&str, u16, Encryption)) -> ServerConfig {
 
 /// 从邮箱地址中取出小写域名；地址不合法时返回 None。
 fn domain_of(email: &str) -> Option<String> {
-    let (local, domain) = email.trim().rsplit_once('@')?;
-    let domain = domain.trim().to_ascii_lowercase();
-    if local.is_empty() || domain.is_empty() || !domain.contains('.') {
-        return None;
-    }
-    Some(domain)
+    super::validation::email_domain(email)
 }
 
 /// 根据邮箱地址推断服务器配置。地址不合法时返回 None。

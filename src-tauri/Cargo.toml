@@ -19,10 +19,30 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+rusqlite = { version = "0.38", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+async-imap = { version = "0.12", default-features = false, features = ["runtime-tokio"] }
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-native-tls"] }
+tokio = { version = "1", features = ["net", "time", "io-util", "macros", "rt", "sync"] }
+tokio-native-tls = "0.3.1"
+mail-parser = { version = "0.11", features = ["full_encoding"] }
+base64 = "0.22"
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+url = "2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

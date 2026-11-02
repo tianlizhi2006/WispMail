@@ -30,6 +30,12 @@ jobs:
       - name: Typecheck frontend
         run: npm run typecheck
 
+      - name: Frontend form tests
+        run: npm test
+
+      - name: Mail rendering browser tests
+        run: npm run test:render
+
       - name: Build frontend
         run: npm run build
 

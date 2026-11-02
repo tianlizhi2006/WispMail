@@ -17,7 +17,36 @@ export interface Account {
   incomingProtocol: IncomingProtocol;
   incoming: ServerConfig;
   outgoing: ServerConfig;
+  incomingUsername: string;
+  outgoingUsername: string;
+  useSamePassword: boolean;
   auth: AuthMethod;
+}
+
+/** 仅在提交时传递凭据，不写入浏览器存储，也不由后端返回。 */
+export interface AccountInput {
+  id?: string | null;
+  email: string;
+  displayName: string;
+  incomingProtocol: "imap";
+  incoming: ServerConfig;
+  outgoing: ServerConfig;
+  incomingUsername: string;
+  outgoingUsername: string;
+  useSamePassword: boolean;
+  auth: "password";
+  password?: string | null;
+  outgoingPassword?: string | null;
+}
+
+export interface ConnectionCheck {
+  success: boolean;
+  message: string;
+}
+
+export interface ConnectionReport {
+  incoming: ConnectionCheck;
+  outgoing: ConnectionCheck;
 }
 
 /** 根据邮箱地址自动识别得到的配置建议（对应后端 `DiscoveredConfig`）。 */
@@ -35,12 +64,86 @@ export interface DiscoveredConfig {
 
 /** 邮件列表项（摘要信息，正文按需加载）。 */
 export interface MessageSummary {
-  id: string;
+  uid: number;
+  uidValidity: number;
   from: string;
+  to: string[];
   subject: string;
   snippet: string;
   date: string;
   unread: boolean;
   flagged: boolean;
   hasAttachments: boolean;
+  size: number;
+}
+
+export interface MailFolder {
+  name: string;
+  displayName: string;
+  selectable: boolean;
+  kind: string;
+}
+
+export interface MessagePage {
+  messages: MessageSummary[];
+  hasMore: boolean;
+  uidValidity: number | null;
+}
+
+export interface MessageAttachment {
+  index: number;
+  name: string;
+  mimeType: string;
+  size: number;
+}
+
+export interface MessageDetail {
+  summary: MessageSummary;
+  cc: string[];
+  replyTo: string[];
+  messageId: string | null;
+  references: string[];
+  textBody: string;
+  htmlBody: string | null;
+  inlineResources: InlineResource[];
+  htmlBaseUrl: string | null;
+  attachments: MessageAttachment[];
+}
+
+/** 正文关联的 MIME 图片；attachmentIndex 仅标记可省略重复下载条目的内嵌图。 */
+export interface InlineResource {
+  contentId: string | null;
+  contentLocation: string | null;
+  mimeType: string;
+  dataBase64: string;
+  attachmentIndex: number | null;
+}
+
+export interface ComposeAttachment {
+  name: string;
+  mimeType: string;
+  dataBase64: string;
+}
+
+export interface ComposeMessage {
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  body: string;
+  inReplyTo?: string | null;
+  references: string[];
+  attachments: ComposeAttachment[];
+}
+
+export interface SendResult {
+  messageId: string;
+  warning: string | null;
+}
+
+export interface MessageRef {
+  accountId: string;
+  folder: string;
+  uid: number;
+  uidValidity: number;
 }

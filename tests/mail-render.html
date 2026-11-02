@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WispMail · 真实浏览器邮件渲染回归</title>
+    <style>
+      body { margin:0; padding:18px; color:#173d2e; background:#e8eee9; font:14px/1.5 system-ui,sans-serif; }
+      h1 { margin:0 0 10px; font-size:20px; }
+      .controls { display:flex; gap:16px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+      button,select { padding:5px 10px; font:inherit; }
+      output { display:block; font-family:ui-monospace,monospace; overflow-wrap:anywhere; }
+      iframe { display:block; width:680px; max-width:100%; min-height:300px; border:1px solid #b7cabd; background:white; margin-top:12px; }
+      #renderer-error { color:#a12317; white-space:pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>本地真实浏览器渲染测试 · 不连接邮箱，不发送邮件</h1>
+    <div class="controls">
+      <label><input id="allow-remote" type="checkbox" checked>允许远程图片（只请求本机测试资源）</label>
+      <label>邮件宽度 <select id="frame-width"><option value="680">680 px</option><option value="420">420 px</option></select></label>
+      <button id="render-again" type="button">重新渲染</button>
+    </div>
+    <output id="render-state">等待真实渲染器…</output>
+    <output id="used-attachments">inline attachments: []</output>
+    <output id="bridge-height">bridge height: waiting</output>
+    <output id="bridge-link">bridge link: waiting</output>
+    <output id="script-breaches">mail script executions: 0</output>
+    <pre id="renderer-error" role="alert"></pre>
+    <iframe id="mail-frame" title="真实邮件渲染回归" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+    <script type="module" src="/tests/mail-render.tsx"></script>
+  </body>
+</html>

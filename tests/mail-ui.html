@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://localhost:* ws://127.0.0.1:*; img-src 'self' data: blob:; frame-src 'self' blob:; form-action 'none'" />
+    <title>WispMail · 本地邮件 UI 测试</title>
+    <style>
+      body.fixture-page { display: grid; grid-template-rows: auto minmax(480px, 1fr) auto; min-width: 860px; height: 100vh; overflow: hidden; }
+      .fixture-toolbar { padding: 10px 16px; color: #4a2f00; background: #fff3c7; border-bottom: 2px solid #e6ae2b; font: 13px/1.5 system-ui, sans-serif; }
+      .fixture-toolbar strong { display: block; margin-bottom: 6px; font-size: 15px; }
+      .fixture-controls { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+      .fixture-controls button { padding: 5px 9px; border: 1px solid #bca565; border-radius: 5px; color: #352711; background: #fffdf5; cursor: pointer; }
+      .fixture-controls label { display: inline-flex; align-items: center; gap: 4px; }
+      .fixture-controls input { width: auto; }
+      #fixture-state { display: block; margin-top: 5px; }
+      #root { min-height: 0; overflow: hidden; }
+      .fixture-diagnostics { max-height: 190px; overflow: auto; padding: 6px 16px; color: #d9e7df; background: #19251f; font: 12px/1.5 ui-monospace, monospace; }
+      .fixture-diagnostics summary { cursor: pointer; }
+      .fixture-diagnostics pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 5px 0; }
+    </style>
+  </head>
+  <body class="fixture-page">
+    <header class="fixture-toolbar">
+      <strong>本地模拟测试，不连接真实邮箱，不发送真实邮件</strong>
+      <div class="fixture-controls">
+        <button id="fixture-network" type="button">模拟离线</button>
+        <button id="fixture-generation" type="button">重置 UIDVALIDITY</button>
+        <button id="fixture-empty" type="button">清空收件箱</button>
+        <button id="fixture-restore" type="button">恢复模拟邮件</button>
+        <label><input id="fixture-delay" type="checkbox" />延迟正文响应 4 秒</label>
+        <button id="fixture-reload" type="button">重载真实组件（保留模拟草稿）</button>
+      </div>
+      <output id="fixture-state" aria-live="polite">正在初始化本地测试数据…</output>
+    </header>
+    <main id="root"></main>
+    <footer class="fixture-diagnostics">
+      <output id="fixture-counts" aria-live="polite">IPC 调用计数：0</output>
+      <span id="fixture-script-status"> · HTML 活动内容未执行</span>
+      <details>
+        <summary>查看调用记录、模拟发送 JSON 和草稿状态（均为测试数据）</summary>
+        <pre id="fixture-log"></pre>
+      </details>
+    </footer>
+    <script src="/tests/mail-ui.tsx" type="module"></script>
+  </body>
+</html>
