@@ -17,11 +17,17 @@ fn app_version() -> String {
     format!("WispMail {}", env!("CARGO_PKG_VERSION"))
 }
 
+/// 根据邮箱地址推断服务器配置；地址不合法时返回 null。
+#[tauri::command]
+fn discover_config(email: &str) -> Option<account::DiscoveredConfig> {
+    account::autodiscover(email)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![app_version])
+        .invoke_handler(tauri::generate_handler![app_version, discover_config])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

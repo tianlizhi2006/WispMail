@@ -20,6 +20,19 @@ export interface Account {
   auth: AuthMethod;
 }
 
+/** 根据邮箱地址自动识别得到的配置建议（对应后端 `DiscoveredConfig`）。 */
+export interface DiscoveredConfig {
+  /** 服务商名称；按命名规则猜测时为 null。 */
+  provider: string | null;
+  /** builtin：内置表，可信；guess：推测，需要用户核对。 */
+  source: "builtin" | "guess";
+  incomingProtocol: IncomingProtocol;
+  incoming: ServerConfig;
+  outgoing: ServerConfig;
+  auth: AuthMethod;
+  note: string | null;
+}
+
 /** 邮件列表项（摘要信息，正文按需加载）。 */
 export interface MessageSummary {
   id: string;
