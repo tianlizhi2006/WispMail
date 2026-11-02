@@ -1,0 +1,36 @@
+/* 全局基础样式与主题变量（浅色 / 深色）。 */
+:root {
+  --bg: #ffffff;
+  --bg-muted: #f5f6f8;
+  --border: #e3e5e9;
+  --text: #1c1e21;
+  --text-muted: #6b7280;
+  --accent: #4a7cff;
+
+  font-family: system-ui, "Segoe UI", -apple-system, sans-serif;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1d22;
+    --bg-muted: #232630;
+    --border: #353944;
+    --text: #e6e8ec;
+    --text-muted: #9aa0aa;
+    --accent: #6b93ff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}

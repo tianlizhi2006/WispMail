@@ -1,0 +1,42 @@
+/* 应用三栏布局。 */
+.app {
+  display: grid;
+  grid-template-columns: 220px 340px 1fr;
+  grid-template-rows: 1fr auto;
+  height: 100%;
+}
+
+.pane {
+  overflow: auto;
+  border-right: 1px solid var(--border);
+}
+
+.pane--folders {
+  background: var(--bg-muted);
+}
+
+.pane--reader {
+  border-right: none;
+}
+
+.statusbar {
+  grid-column: 1 / -1;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-muted);
+  border-top: 1px solid var(--border);
+}
+
+.placeholder {
+  padding: 16px;
+  color: var(--text-muted);
+}
+
+.placeholder h2 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text);
+}
