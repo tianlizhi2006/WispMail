@@ -171,8 +171,16 @@ async fn check_imap_with_connector(
 /// 网易邮箱（163 / 126 / yeah.net / 188 及网易企业邮箱）要求登录后先用 IMAP ID（RFC 2971）
 /// 表明客户端身份，否则打开文件夹时返回 "Unsafe Login"。其他服务器不发送，避免多一次往返。
 pub(super) fn requires_client_id(host: &str) -> bool {
+    host_in(
+        host,
+        &["163.com", "126.com", "yeah.net", "188.com", "netease.com"],
+    )
+}
+
+/// 主机名是否为这些域名之一或其子域名。
+pub(super) fn host_in(host: &str, domains: &[&str]) -> bool {
     let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
-    ["163.com", "126.com", "yeah.net", "188.com", "netease.com"]
+    domains
         .iter()
         .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
 }

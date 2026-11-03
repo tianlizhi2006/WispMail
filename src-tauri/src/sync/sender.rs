@@ -1,13 +1,13 @@
 //! SMTP 单次投递；只有确认成功后才归档。归档失败不能触发重新投递。
 
-use std::future::Future;
+use std::{future::Future, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use lettre::{
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
     message::{Attachment, Mailbox, MultiPart, SinglePart, header::ContentType},
 };
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 use crate::{
     account::{Account, AccountCredentials},
@@ -18,7 +18,7 @@ use crate::{
 };
 
 use super::{
-    connection::{ImapSession, open_imap, smtp_transport},
+    connection::{ImapSession, host_in, open_imap, smtp_transport},
     mailbox::{OPERATION_TIMEOUT, bounded, finish, list_in_session},
     organize::SpecialFolder,
 };
@@ -35,9 +35,10 @@ pub async fn send_message(
         return Err("编码后的邮件超过 20 MiB，请减少附件或正文。".into());
     }
     let transport = smtp_transport(account, credentials)?;
-    send_prepared(&transport, &message, &raw, message_id, async {
+    let waits = sent_copy_waits(&account.outgoing.host);
+    send_prepared(&transport, &message, &raw, message_id.clone(), async {
         let mut session = open_imap(account, credentials).await?;
-        let result = archive_in_session(&mut session, &raw).await;
+        let result = archive_in_session(&mut session, &raw, &message_id, waits).await;
         finish(session, result).await
     })
     .await
@@ -74,13 +75,85 @@ pub(super) async fn deliver(
     }
 }
 
+/// 网易、QQ、Gmail、Outlook 会把经 SMTP 发出的邮件自动存入已发送，且可能稍有延迟。
+/// 对这些服务商多等几次再决定是否自行归档；其他服务器只检查一次。
+const AUTO_SAVE_WAITS: [Duration; 6] = [
+    Duration::ZERO,
+    Duration::from_millis(500),
+    Duration::from_secs(1),
+    Duration::from_millis(1500),
+    Duration::from_secs(2),
+    Duration::from_secs(3),
+];
+const SINGLE_CHECK: [Duration; 1] = [Duration::ZERO];
+
+pub(super) fn server_saves_sent(smtp_host: &str) -> bool {
+    host_in(
+        smtp_host,
+        &[
+            "163.com",
+            "126.com",
+            "yeah.net",
+            "188.com",
+            "netease.com",
+            "qq.com",
+            "foxmail.com",
+            "gmail.com",
+            "googlemail.com",
+            "outlook.com",
+            "office365.com",
+            "hotmail.com",
+            "live.com",
+        ],
+    )
+}
+
+pub(super) fn sent_copy_waits(smtp_host: &str) -> &'static [Duration] {
+    if server_saves_sent(smtp_host) {
+        &AUTO_SAVE_WAITS
+    } else {
+        &SINGLE_CHECK
+    }
+}
+
+/// 已发送文件夹里是否已有这封邮件（按 Message-ID）。查询失败视为没有，交由 APPEND 归档。
+async fn already_saved(session: &mut ImapSession, folder: &str, message_id: &str) -> bool {
+    let id = message_id.trim_matches(['<', '>']);
+    if id.is_empty()
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && byte != b'"' && byte != b'\\')
+    {
+        return false;
+    }
+    if session.examine(folder).await.is_err() {
+        return false;
+    }
+    session
+        .uid_search(format!("HEADER Message-ID \"{id}\""))
+        .await
+        .is_ok_and(|uids| !uids.is_empty())
+}
+
 pub(super) async fn archive_in_session(
     session: &mut ImapSession,
     raw: &[u8],
+    message_id: &str,
+    waits: &[Duration],
 ) -> Result<(), String> {
     let folders = list_in_session(session).await?;
     let name = if let Some(folder) = SpecialFolder::Sent.find(&folders) {
-        folder.name.clone()
+        let name = folder.name.clone();
+        for wait in waits {
+            if !wait.is_zero() {
+                sleep(*wait).await;
+            }
+            if already_saved(session, &name, message_id).await {
+                // 服务器已自动保存，再 APPEND 会出现两封一模一样的邮件。
+                return Ok(());
+            }
+        }
+        name
     } else {
         session
             .create("Sent")

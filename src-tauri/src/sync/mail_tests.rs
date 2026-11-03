@@ -24,7 +24,9 @@ use super::{
     organize::{
         MailFlag, MessageSet, delete_permanently_in_session, move_in_session, set_flag_in_session,
     },
-    sender::{archive_in_session, build_message, send_prepared},
+    sender::{
+        archive_in_session, build_message, send_prepared, sent_copy_waits, server_saves_sent,
+    },
     watch::{WatchTiming, watch_session},
 };
 
@@ -645,23 +647,57 @@ async fn disconnected_after_data_reports_uncertainty_without_retry_or_archiving(
     assert!(!server.await.unwrap().is_empty());
 }
 
+/// 已发送文件夹的 LIST，以及每次 EXAMINE + UID SEARCH 的结果（是否已存在同一 Message-ID）。
+async fn answer_sent_lookup(peer: &mut Peer, message_id: &str, found: bool) {
+    let examine = line(peer).await;
+    assert!(
+        examine.ends_with(" EXAMINE \"&XfJT0ZAB-\"\r\n"),
+        "{examine}"
+    );
+    let tag = examine.split_whitespace().next().unwrap();
+    write(
+        peer.get_mut(),
+        &format!("* 1 EXISTS\r\n* OK [UIDVALIDITY 7] ok\r\n{tag} OK [READ-ONLY] examined\r\n"),
+    )
+    .await;
+    let search = line(peer).await;
+    let id = message_id.trim_matches(['<', '>']);
+    assert!(
+        search.ends_with(&format!(" UID SEARCH HEADER Message-ID \"{id}\"\r\n")),
+        "{search}"
+    );
+    let tag = search.split_whitespace().next().unwrap();
+    let hits = if found { " 42" } else { "" };
+    write(
+        peer.get_mut(),
+        &format!("* SEARCH{hits}\r\n{tag} OK search\r\n"),
+    )
+    .await;
+}
+
+async fn list_sent_folder(peer: &mut Peer) {
+    let command = line(peer).await;
+    assert!(command.ends_with(" LIST \"\" *\r\n"));
+    let tag = command.split_whitespace().next().unwrap();
+    write(
+        peer.get_mut(),
+        &format!("* LIST (\\Sent) \"/\" \"&XfJT0ZAB-\"\r\n{tag} OK list\r\n"),
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn sent_archive_appends_same_mime_to_special_use_folder() {
-    let (message, _) = build_message(&account(), &compose(), None).unwrap();
+    let (message, id) = build_message(&account(), &compose(), None).unwrap();
     let raw = message.formatted();
     let expected = raw.clone();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
+    let server_id = id.clone();
     let server = tokio::spawn(async move {
         let mut peer = imap_login(listener).await;
-        let command = line(&mut peer).await;
-        assert!(command.ends_with(" LIST \"\" *\r\n"));
-        let tag = command.split_whitespace().next().unwrap();
-        write(
-            peer.get_mut(),
-            &format!("* LIST (\\Sent) \"/\" \"&XfJT0ZAB-\"\r\n{tag} OK list\r\n"),
-        )
-        .await;
+        list_sent_folder(&mut peer).await;
+        answer_sent_lookup(&mut peer, &server_id, false).await;
         let append = line(&mut peer).await;
         assert!(append.ends_with(&format!(
             " APPEND \"&XfJT0ZAB-\" (\\Seen) {{{}}}\r\n",
@@ -677,9 +713,68 @@ async fn sent_archive_appends_same_mime_to_special_use_folder() {
         logout(&mut peer).await;
     });
     let mut session = session(port).await;
-    archive_in_session(&mut session, &raw).await.unwrap();
+    archive_in_session(&mut session, &raw, &id, &[Duration::ZERO])
+        .await
+        .unwrap();
     finish(session, Ok(())).await.unwrap();
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn sent_archive_skips_append_when_the_server_saved_a_copy_itself() {
+    let (message, id) = build_message(&account(), &compose(), None).unwrap();
+    let raw = message.formatted();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server_id = id.clone();
+    let server = tokio::spawn(async move {
+        let mut peer = imap_login(listener).await;
+        list_sent_folder(&mut peer).await;
+        // 163 / QQ 的自动保存稍有延迟：第一次没找到，等待后再查到。
+        answer_sent_lookup(&mut peer, &server_id, false).await;
+        answer_sent_lookup(&mut peer, &server_id, true).await;
+        // 不能再出现 APPEND：下一条命令必须是 LOGOUT。
+        logout(&mut peer).await;
+    });
+    let mut session = session(port).await;
+    archive_in_session(
+        &mut session,
+        &raw,
+        &id,
+        &[
+            Duration::ZERO,
+            Duration::from_millis(10),
+            Duration::from_millis(10),
+        ],
+    )
+    .await
+    .unwrap();
+    finish(session, Ok(())).await.unwrap();
+    server.await.unwrap();
+}
+
+#[test]
+fn providers_that_auto_save_sent_mail_are_waited_for() {
+    for host in [
+        "smtp.163.com",
+        "smtp.126.com",
+        "smtp.yeah.net",
+        "smtp.qq.com",
+        "smtp.exmail.qq.com",
+        "smtp.gmail.com",
+        "smtp.office365.com",
+        "smtp-mail.outlook.com",
+    ] {
+        assert!(server_saves_sent(host), "{host}");
+        assert!(sent_copy_waits(host).len() > 1, "{host}");
+    }
+    for host in ["mail.example.com", "smtp.163.com.evil.test", "notqq.com"] {
+        assert!(!server_saves_sent(host), "{host}");
+        assert_eq!(sent_copy_waits(host), &[Duration::ZERO]);
+    }
+    // 总等待时间必须远小于归档的 30 秒上限。
+    let total: Duration = sent_copy_waits("smtp.163.com").iter().sum();
+    assert!(total <= Duration::from_secs(10));
 }
 
 #[test]
