@@ -9,6 +9,7 @@
 
 pub mod account;
 mod commands;
+mod inbox_watch;
 pub mod mail;
 mod mail_commands;
 pub mod storage;
@@ -33,6 +34,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // 初始化错误也交给界面展示，避免应用直接退出而没有可读提示。
             let service = (|| {
@@ -45,6 +47,9 @@ pub fn run() {
                 account::AccountService::open(directory.join("wispmail.sqlite3"))
             })();
             app.manage(commands::AccountsState::new(service));
+            app.manage(inbox_watch::InboxWatchers::default());
+            // 为已保存的账户开始监视收件箱，新邮件到达时实时同步并提醒。
+            tauri::async_runtime::spawn(inbox_watch::start_all(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

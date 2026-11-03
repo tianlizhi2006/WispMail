@@ -294,13 +294,40 @@ async function mockInvoke(command: string, args: Args = {}): Promise<unknown> {
         for (const key of [...bodies.keys()]) if (key.startsWith(`${id}|`)) bodies.delete(key);
         return null;
       }
+      case "plugin:event|listen": {
+        const list = listeners.get(String(args.event)) ?? [];
+        list.push(Number(args.handler));
+        listeners.set(String(args.event), list);
+        return Number(args.handler);
+      }
+      case "plugin:event|unlisten": return null;
       default: throw new Error(`UI 夹具尚未实现命令：${command}`);
     }
   } finally { updateDiagnostics(); }
 }
 
+// Minimal event bridge: listen() registers a transformCallback id; emitMock() calls it like the backend would.
+const callbacks = new Map<number, (message: unknown) => void>();
+const listeners = new Map<string, number[]>();
+let nextCallback = 1;
+function transformCallback(callback: (message: unknown) => void) { const id = nextCallback++; callbacks.set(id, callback); return id; }
+function emitMock(event: string, payload: unknown) { for (const id of listeners.get(event) ?? []) callbacks.get(id)?.({ event, id, payload }); }
+
 // @tauri-apps/api/core.js checks globalThis.isTauri and delegates invoke directly here.
-Object.assign(window, { isTauri: true, __TAURI_INTERNALS__: { invoke: mockInvoke } });
+Object.assign(window, { isTauri: true, __TAURI_INTERNALS__: { invoke: mockInvoke, transformCallback } });
+document.getElementById("fixture-arrive")!.addEventListener("click", () => {
+  // Same effect as the backend watcher: the server gets a message, the cache is synced, then mail-changed fires.
+  const mailbox = requireBox(activeAccount);
+  const uid = Math.max(100, ...mailbox.incoming.map((detail) => detail.summary.uid)) + 1;
+  const template = clone(mailbox.incoming[mailbox.incoming.length - 1] ?? seedDetails(accounts.find((account) => account.id === activeAccount)!, mailbox.generation)[3]);
+  template.summary = { ...template.summary, uid, uidValidity: mailbox.generation, unread: true, subject: `实时到达 · 第 ${uid} 号邮件`, snippet: "这封邮件由“模拟新邮件到达”生成。", date: new Date().toISOString() };
+  template.messageId = `live-${uid}@example.test`;
+  mailbox.incoming.unshift(template);
+  const saved = cache.get(boxKey(activeAccount, "INBOX"));
+  if (saved && saved.generation === mailbox.generation) saved.messages.unshift(clone(template.summary));
+  emitMock("mail-changed", { accountId: activeAccount, folder: "INBOX", newCount: 1 });
+  updateDiagnostics(`控制：模拟新邮件 UID ${uid} 到达并发出 mail-changed`);
+});
 document.getElementById("fixture-network")!.addEventListener("click", () => { online = !online; updateDiagnostics(online ? "控制：恢复在线" : "控制：模拟离线"); });
 document.getElementById("fixture-delay")!.addEventListener("change", (event) => { delayBody = (event.currentTarget as HTMLInputElement).checked; updateDiagnostics("控制：切换正文延迟"); });
 document.getElementById("fixture-generation")!.addEventListener("click", () => {

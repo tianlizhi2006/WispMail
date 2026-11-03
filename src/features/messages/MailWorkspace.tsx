@@ -7,6 +7,7 @@ import {
   getMessage,
   listCachedFolders,
   listCachedMessages,
+  onMailChanged,
   organizeMessages,
   refreshFolders,
   saveAttachment,
@@ -42,6 +43,7 @@ import {
   mergeMessagePages,
   messageKey,
   moveTargets,
+  refreshFirstPage,
   removeFromList,
   replyMessage,
   selectionRemainsInPage,
@@ -104,6 +106,18 @@ export function MailWorkspace(props: {
 
   onMount(() => {
     void loadFolders(true);
+    // 后台监视已把新邮件同步进缓存：当前正看着这个文件夹时，直接从缓存刷新列表。
+    const stop = onMailChanged((event) => {
+      const current = folder();
+      if (
+        alive &&
+        event.accountId === accountId &&
+        current &&
+        current.name.toUpperCase() === event.folder.toUpperCase()
+      )
+        void refreshFromCache(current);
+    });
+    onCleanup(stop);
   });
   onCleanup(() => {
     alive = false;
@@ -230,6 +244,25 @@ export function MailWorkspace(props: {
         );
     } finally {
       if (alive && listGuard.valid(token)) setListLoading(false);
+    }
+  }
+
+  /** 合并缓存中的最新一页，保留已加载的更早邮件和当前选择。 */
+  async function refreshFromCache(target: MailFolder) {
+    // 正在同步时，同步结果本身就包含最新邮件。
+    if (listLoading() || moreLoading()) return;
+    try {
+      const page = await listCachedMessages(accountId, target.name);
+      if (!alive || folder()?.name !== target.name || listLoading()) return;
+      if (page.uidValidity !== uidValidity()) {
+        // 收件箱被重建：旧 UID 已失效，按完整重新同步处理。
+        void loadMessages(target, false);
+        return;
+      }
+      setMessages((current) => refreshFirstPage(current, page));
+      if (!page.hasMore) setHasMore(false);
+    } catch {
+      /* 读取缓存失败时保留当前列表，用户仍可手动刷新。 */
     }
   }
 

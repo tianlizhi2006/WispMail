@@ -22,6 +22,7 @@ use super::{
         MailFlag, MessageSet, delete_permanently_in_session, move_in_session, set_flag_in_session,
     },
     sender::{archive_in_session, build_message, send_prepared},
+    watch::{WatchTiming, watch_session},
 };
 
 async fn set_read_in_session(
@@ -750,4 +751,77 @@ fn forwarded_part_size_matches_the_built_message_except_for_headers() {
     let headers = built.formatted().len() - estimate;
     // 剩下的只有邮件头（发件人、收件人、主题、Message-ID 等），与正文大小无关。
     assert!((200..1500).contains(&headers), "header overhead {headers}");
+}
+
+#[tokio::test]
+async fn idle_watcher_reports_pushed_changes_and_ends_idle_cleanly() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let mut peer = imap_login(listener).await;
+        let command = line(&mut peer).await;
+        assert!(command.ends_with(" CAPABILITY\r\n"), "{command}");
+        let tag = command.split_whitespace().next().unwrap();
+        write(peer.get_mut(), &capability(" IDLE").replace("{tag}", tag)).await;
+        let command = line(&mut peer).await;
+        assert!(command.ends_with(" EXAMINE \"INBOX\"\r\n"), "{command}");
+        let tag = command.split_whitespace().next().unwrap();
+        write(peer.get_mut(), &selected(3, 7).replace("{tag}", tag)).await;
+        let idle = line(&mut peer).await;
+        assert!(idle.ends_with(" IDLE\r\n"), "{idle}");
+        let idle_tag = idle.split_whitespace().next().unwrap().to_string();
+        write(peer.get_mut(), "+ idling\r\n").await;
+        // 服务器推送新邮件。
+        write(peer.get_mut(), "* 4 EXISTS\r\n").await;
+        assert_eq!(line(&mut peer).await, "DONE\r\n");
+        write(
+            peer.get_mut(),
+            &format!("{idle_tag} OK IDLE terminated\r\n"),
+        )
+        .await;
+        logout(&mut peer).await;
+    });
+    let mut calls = 0;
+    // 第一次回调在打开收件箱后（补上断线期间的变化），第二次来自服务器推送。
+    watch_session(session(port).await, WatchTiming::default(), || {
+        calls += 1;
+        calls < 2
+    })
+    .await
+    .unwrap();
+    assert_eq!(calls, 2);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn watcher_without_idle_polls_status_and_reports_only_real_changes() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let status = |messages: u32, next: u32| {
+        format!("* STATUS \"INBOX\" (MESSAGES {messages} UIDNEXT {next})\r\n{{tag}} OK status\r\n")
+    };
+    let expected = "STATUS \"INBOX\" (MESSAGES UIDNEXT)".to_string();
+    let server = tokio::spawn(scripted_imap(
+        listener,
+        vec![
+            ("CAPABILITY".into(), capability("")),
+            (expected.clone(), status(3, 10)),
+            (expected.clone(), status(3, 10)),
+            (expected, status(4, 11)),
+        ],
+    ));
+    let timing = WatchTiming {
+        idle_refresh: Duration::from_secs(60),
+        poll_interval: Duration::from_millis(20),
+    };
+    let mut calls = 0;
+    watch_session(session(port).await, timing, || {
+        calls += 1;
+        calls < 2
+    })
+    .await
+    .unwrap();
+    // 第二次检查没有变化，不回调；第三次邮件数和 UIDNEXT 变化才回调。
+    assert_eq!(calls, 2);
+    server.await.unwrap();
 }

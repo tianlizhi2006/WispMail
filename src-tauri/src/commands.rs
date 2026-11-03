@@ -6,7 +6,10 @@ use std::{
     sync::{Arc, Mutex, Weak},
 };
 
+use tauri::Manager;
+
 use crate::account::{Account, AccountInput, AccountService};
+use crate::inbox_watch::InboxWatchers;
 use crate::sync::{self, ConnectionReport, ImapPool};
 
 pub struct AccountsState {
@@ -112,6 +115,7 @@ pub async fn test_account_connection(
 #[tauri::command]
 pub async fn save_account(
     input: AccountInput,
+    app: tauri::AppHandle,
     state: tauri::State<'_, AccountsState>,
 ) -> Result<Account, String> {
     let (account, credentials) =
@@ -134,18 +138,21 @@ pub async fn save_account(
         service.save_verified_account(account, &credentials)
     })
     .await?;
-    // 凭据可能已更换，丢弃旧凭据登录的空闲连接。
+    // 凭据可能已更换，丢弃旧凭据登录的空闲连接，并用新设置重新监视收件箱。
     state.imap.forget(&account_id);
+    app.state::<InboxWatchers>().start(&app, &saved.id);
     Ok(saved)
 }
 
 #[tauri::command]
 pub async fn delete_account(
     id: String,
+    app: tauri::AppHandle,
     state: tauri::State<'_, AccountsState>,
 ) -> Result<(), String> {
     let account_id = id.clone();
     with_accounts(&state, move |service| service.delete_account(&id)).await?;
     state.imap.forget(&account_id);
+    app.state::<InboxWatchers>().stop(&account_id);
     Ok(())
 }

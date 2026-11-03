@@ -378,6 +378,25 @@ export function mergeMessagePages(
   return [...merged.values()].sort((a, b) => b.uid - a.uid);
 }
 
+/**
+ * 用最新一页替换列表开头：该页 UID 范围内以它为准（新邮件加入、已删除的移除），
+ * 范围之外用户已加载的更早邮件保留。该页已是全部邮件时直接替换。
+ */
+export function refreshFirstPage(
+  current: MessageSummary[],
+  page: MessagePage,
+): MessageSummary[] {
+  const generation = page.uidValidity;
+  if (!page.hasMore || !page.messages.length) return page.messages;
+  const oldest = Math.min(...page.messages.map((message) => message.uid));
+  return [
+    ...page.messages,
+    ...current.filter(
+      (message) => message.uidValidity === generation && message.uid < oldest,
+    ),
+  ].sort((a, b) => b.uid - a.uid);
+}
+
 export function selectionRemainsInPage(
   selected: MessageSummary,
   page: MessagePage,

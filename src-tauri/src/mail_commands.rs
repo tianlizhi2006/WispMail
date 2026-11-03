@@ -90,8 +90,20 @@ pub async fn sync_folder(
     before_uid: Option<u32>,
     expected_uid_validity: Option<u32>,
     app: tauri::AppHandle,
-    state: tauri::State<'_, AccountsState>,
 ) -> Result<MessagePage, String> {
+    sync_and_cache(&app, account_id, folder, before_uid, expected_uid_validity).await
+}
+
+/// 同步文件夹的一页并写入缓存，返回与缓存合并后的列表，随后在后台预取最新邮件的正文。
+/// 界面刷新和收件箱实时监视共用这一流程。
+pub(crate) async fn sync_and_cache(
+    app: &tauri::AppHandle,
+    account_id: String,
+    folder: String,
+    before_uid: Option<u32>,
+    expected_uid_validity: Option<u32>,
+) -> Result<MessagePage, String> {
+    let state = app.state::<AccountsState>();
     let page = {
         let (account, credentials, _permit) = connection(&state, account_id).await?;
         let cached_account = account.id.clone();
@@ -137,7 +149,7 @@ pub async fn sync_folder(
     };
     let (account_id, page) = page;
     if let Some(validity) = page.uid_validity {
-        spawn_prefetch(app, account_id, folder, validity);
+        spawn_prefetch(app.clone(), account_id, folder, validity);
     }
     Ok(page)
 }

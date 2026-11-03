@@ -17,6 +17,7 @@ import {
   mergeMessagePages,
   messageKey,
   moveTargets,
+  refreshFirstPage,
   parseAddresses,
   prepareSend,
   removeFromList,
@@ -235,6 +236,29 @@ test("size helpers follow Base64 and quoted-printable encoding rules", () => {
     estimateMessageSize(withForward, 50_000) >
       estimateMessageSize(withForward, null) + 49_000,
     "the original message size is included once known",
+  );
+});
+
+test("live refresh replaces the newest page but keeps older pages the user loaded", () => {
+  const current = [row(9), row(8), row(7), row(5), row(3), row(2)];
+  // 服务器上：10 是新邮件，8 已被删除；最新一页覆盖 UID 5–10，之后还有更早的邮件。
+  const page = {
+    messages: [row(10), row(9), row(7), row(5)],
+    hasMore: true,
+    uidValidity: 9,
+  };
+  assert.deepEqual(
+    refreshFirstPage(current, page).map((m) => m.uid),
+    [10, 9, 7, 5, 3, 2],
+  );
+  const complete = {
+    messages: [row(10), row(9)],
+    hasMore: false,
+    uidValidity: 9,
+  };
+  assert.deepEqual(
+    refreshFirstPage(current, complete).map((m) => m.uid),
+    [10, 9],
   );
 });
 

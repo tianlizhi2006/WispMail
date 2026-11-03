@@ -5,6 +5,7 @@ mod mailbox;
 mod organize;
 mod pool;
 mod sender;
+mod watch;
 
 #[cfg(test)]
 mod mail_tests;
@@ -17,3 +18,4 @@ pub use organize::{
 };
 pub use pool::ImapPool;
 pub use sender::{forwarded_part_size, send_message};
+pub use watch::{INBOX, WatchTiming, watch_inbox};

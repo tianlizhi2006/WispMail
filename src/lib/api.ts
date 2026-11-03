@@ -1,5 +1,6 @@
 /** 与 Rust 后端通信的封装。所有 Tauri command 调用集中在此，便于管理与测试。 */
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type {
   Account,
   AccountInput,
@@ -28,6 +29,34 @@ function command<T>(name: string, args?: Record<string, unknown>): Promise<T> {
     );
   }
   return invoke<T>(name, args);
+}
+
+/** 后端在收件箱有变化（新邮件、删除等）并完成同步后发出。 */
+export interface MailChanged {
+  accountId: string;
+  folder: string;
+  newCount: number;
+}
+
+/** 订阅收件箱实时变化；返回取消订阅函数。非桌面环境下不做任何事。 */
+export function onMailChanged(
+  handler: (event: MailChanged) => void,
+): () => void {
+  if (!desktopAvailable) return () => {};
+  let stopped = false;
+  let unlisten: (() => void) | undefined;
+  listen<MailChanged>("mail-changed", (event) => handler(event.payload))
+    .then((stop) => {
+      if (stopped) stop();
+      else unlisten = stop;
+    })
+    .catch(() => {
+      /* 事件通道不可用时仍可手动刷新。 */
+    });
+  return () => {
+    stopped = true;
+    unlisten?.();
+  };
 }
 
 export function errorMessage(error: unknown): string {
