@@ -149,7 +149,10 @@
 }
 .list-search:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* 搜索框外层已有边框提示焦点，不再叠加全局的焦点描边。 */
+.list-search input:focus-visible {
+  outline: none;
 }
 .list-search > svg {
   flex-shrink: 0;
