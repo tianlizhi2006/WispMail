@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::storage::Store;
 
 use super::{
-    Account, AccountCredentials, AccountInput,
+    Account, AccountCredentials, AccountInput, AuthMethod,
     credentials::{CredentialStore, SystemCredentials},
     validation::validate_input,
 };
@@ -90,10 +90,15 @@ impl<C: CredentialStore> AccountService<C> {
         };
         let id = input.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         self.ensure_unique_email(&input.email, &id)?;
+        let oauth = input.auth == AuthMethod::OAuth2;
         let incoming_password = match input.password.filter(|value| !value.is_empty()) {
             Some(value) => value,
             None => self.credentials.get(&id)?.ok_or_else(|| {
-                "请输入 IMAP 密码或授权码；如果原凭据已丢失，请重新填写。".to_string()
+                if oauth {
+                    "未找到该账户的登录授权，请在账户设置中重新登录。".to_string()
+                } else {
+                    "请输入 IMAP 密码或授权码；如果原凭据已丢失，请重新填写。".to_string()
+                }
             })?,
         };
         let outgoing_password = if input.use_same_password {
@@ -176,6 +181,14 @@ impl<C: CredentialStore> AccountService<C> {
             return Err(self.rollback_error(error.to_string(), &changes));
         }
         Ok(account)
+    }
+
+    /// 保存服务商轮换后的新刷新令牌。只用于已保存的 OAuth 账户。
+    pub fn replace_oauth_token(&self, id: &str, refresh_token: &str) -> Result<(), String> {
+        if self.get_account(id)?.auth != AuthMethod::OAuth2 {
+            return Err("该账户不使用 OAuth 登录。".into());
+        }
+        self.credentials.set(id, refresh_token)
     }
 
     /// 删除本地账户与本机保存的凭据，不触碰服务器上的邮件。
@@ -786,6 +799,81 @@ mod tests {
         let mut pop3 = input();
         pop3.incoming_protocol = IncomingProtocol::Pop3;
         assert!(service.resolve_input(pop3).is_err());
+    }
+
+    fn oauth_input() -> AccountInput {
+        let provider = &crate::oauth::MICROSOFT;
+        AccountInput {
+            email: "me@outlook.com".into(),
+            incoming_username: "ignored".into(),
+            use_same_password: false,
+            incoming: provider.incoming(),
+            outgoing: provider.outgoing(true),
+            auth: AuthMethod::OAuth2,
+            password: None,
+            ..input()
+        }
+    }
+
+    #[test]
+    fn oauth_accounts_use_the_stored_refresh_token_and_fixed_servers() {
+        let service = service();
+        let error = service.resolve_input(oauth_input()).err().unwrap();
+        assert!(error.contains("重新登录"), "{error}");
+        let mut with_password = oauth_input();
+        with_password.password = Some("typed-password".into());
+        assert!(service.resolve_input(with_password).is_err());
+        let mut elsewhere = oauth_input();
+        elsewhere.outgoing.host = "smtp.evil.test".into();
+        assert!(service.resolve_input(elsewhere).is_err());
+
+        let account = Account {
+            id: "oauth-account".into(),
+            email: "me@outlook.com".into(),
+            display_name: "Me".into(),
+            incoming_username: "me@outlook.com".into(),
+            outgoing_username: "me@outlook.com".into(),
+            use_same_password: true,
+            incoming_protocol: IncomingProtocol::Imap,
+            incoming: crate::oauth::MICROSOFT.incoming(),
+            outgoing: crate::oauth::MICROSOFT.outgoing(true),
+            auth: AuthMethod::OAuth2,
+        };
+        service
+            .save_verified_account(account.clone(), &shared_credentials("refresh-1"))
+            .unwrap();
+        let (loaded, credentials) = service.load_connection(&account.id).unwrap();
+        assert_eq!(loaded, account);
+        assert_eq!(credentials.incoming_password, "refresh-1");
+        assert_eq!(credentials.outgoing_password, "refresh-1");
+        // 编辑显示名称时不需要也不允许输入密码，原授权保留。
+        let edit = AccountInput {
+            id: Some(account.id.clone()),
+            display_name: "New name".into(),
+            ..oauth_input()
+        };
+        let (edited, credentials) = service.resolve_input(edit).unwrap();
+        assert_eq!(edited.incoming_username, "me@outlook.com");
+        assert!(edited.use_same_password);
+        assert_eq!(credentials.incoming_password, "refresh-1");
+
+        service
+            .replace_oauth_token(&account.id, "refresh-2")
+            .unwrap();
+        assert_eq!(
+            service
+                .load_connection(&account.id)
+                .unwrap()
+                .1
+                .incoming_password,
+            "refresh-2"
+        );
+        let password_account = add(&service);
+        assert!(
+            service
+                .replace_oauth_token(&password_account.id, "x")
+                .is_err()
+        );
     }
 
     #[test]

@@ -704,7 +704,7 @@
 }
 .configuration-modes {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 10px;
   margin-bottom: 18px;
 }
@@ -719,6 +719,7 @@
   background: var(--bg);
 }
 .configuration-mode > svg {
+  flex-shrink: 0;
   width: 18px;
   height: 18px;
   color: var(--text-muted);
@@ -824,6 +825,19 @@
   background: var(--accent-soft);
   font-size: 12px;
   line-height: 1.7;
+}
+.auth-guide p {
+  margin: 4px 0;
+}
+.oauth-button {
+  justify-self: start;
+}
+.oauth-button svg {
+  width: 16px;
+  height: 16px;
+}
+.working-state .button {
+  margin-left: auto;
 }
 .auth-guide strong {
   color: var(--accent);

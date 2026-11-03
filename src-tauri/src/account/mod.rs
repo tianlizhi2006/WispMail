@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 pub use providers::{DiscoveredConfig, autodiscover};
 pub use service::AccountService;
+pub(crate) use validation::normalized_email;
 
 /// 收发信使用的加密方式。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -118,6 +119,16 @@ impl Account {
 pub struct AccountCredentials {
     pub incoming_password: String,
     pub outgoing_password: String,
+}
+
+impl AccountCredentials {
+    /// 显式复制：凭据不实现 Clone，避免无意间扩散。
+    pub(crate) fn clone_secret(&self) -> Self {
+        Self {
+            incoming_password: self.incoming_password.clone(),
+            outgoing_password: self.outgoing_password.clone(),
+        }
+    }
 }
 
 /// 添加或编辑账户的请求。密码只用于验证连接并交给系统凭据管理器。

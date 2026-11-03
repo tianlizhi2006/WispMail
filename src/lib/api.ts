@@ -6,6 +6,7 @@ import type {
   AccountInput,
   ConnectionReport,
   DiscoveredConfig,
+  OAuthProviderInfo,
   ComposeMessage,
   ForwardAttachments,
   ForwardSource,
@@ -97,6 +98,25 @@ export function saveAccount(input: AccountInput): Promise<Account> {
 
 export function deleteAccount(id: string): Promise<void> {
   return command<void>("delete_account", { id });
+}
+
+export function oauthProviders(): Promise<OAuthProviderInfo[]> {
+  return command<OAuthProviderInfo[]>("oauth_providers");
+}
+
+/** 在系统浏览器中登录；完成后后端验证收发信并保存账户。传入 accountId 时为重新授权。 */
+export function signInOAuth(
+  provider: string,
+  accountId?: string,
+): Promise<Account> {
+  return command<Account>("sign_in_oauth", {
+    provider,
+    accountId: accountId ?? null,
+  });
+}
+
+export function cancelOAuthSignIn(): Promise<void> {
+  return command<void>("cancel_oauth_sign_in");
 }
 
 export function listCachedFolders(accountId: string): Promise<MailFolder[]> {

@@ -7,11 +7,14 @@ import {
   Show,
 } from "solid-js";
 import {
+  cancelOAuthSignIn,
   desktopAvailable,
   discoverConfig,
   errorMessage,
+  oauthProviders,
   openEmailLink,
   saveAccount,
+  signInOAuth,
   testAccountConnection,
 } from "../../lib/api";
 import type {
@@ -19,6 +22,7 @@ import type {
   AccountInput,
   ConnectionReport,
   DiscoveredConfig,
+  OAuthProviderInfo,
   ServerConfig,
 } from "../../lib/types";
 import { Icon } from "../../ui/Icon";
@@ -29,6 +33,7 @@ import {
   createDiscoveryGuard,
   requiresOutgoingPassword,
   initialModeFor,
+  oauthEditSubmission,
   setPasswordSharing,
   shouldDiscoverConfig,
   type ConfigurationMode,
@@ -61,9 +66,12 @@ export function AccountEditor(props: {
   const [lastDiscoveredEmail, setLastDiscoveredEmail] = createSignal(
     initial?.email ?? "",
   );
-  const [busy, setBusy] = createSignal<"discover" | "test" | "save" | null>(
-    null,
-  );
+  const [busy, setBusy] = createSignal<
+    "discover" | "test" | "save" | "signin" | null
+  >(null);
+  /** 微软账户登录；undefined 表示尚未从后端读取。 */
+  const [microsoft, setMicrosoft] = createSignal<OAuthProviderInfo>();
+  const newOAuthAccount = () => mode() === "oauth" && !initial;
   const [error, setError] = createSignal("");
   const [result, setResult] = createSignal<ConnectionReport>();
   let dialog!: HTMLDialogElement;
@@ -80,15 +88,29 @@ export function AccountEditor(props: {
     setDraft((current) => ({ ...current, password: "", outgoingPassword: "" }));
   }
 
-  onMount(() => dialog.showModal());
+  onMount(() => {
+    dialog.showModal();
+    if (desktopAvailable)
+      void oauthProviders()
+        .then((providers) => {
+          if (alive)
+            setMicrosoft(
+              providers.find((provider) => provider.id === "microsoft"),
+            );
+        })
+        .catch(() => undefined);
+  });
   onCleanup(() => {
     alive = false;
     discovery.invalidate();
     clearSecrets();
+    if (busy() === "signin") void cancelOAuthSignIn().catch(() => undefined);
   });
 
   function close() {
     if (busy() === "test" || busy() === "save") return;
+    // 关闭窗口即放弃浏览器登录，不会保存账户。
+    if (busy() === "signin") void cancelOAuthSignIn().catch(() => undefined);
     clearSecrets();
     dialog.close();
     props.onClose();
@@ -206,8 +228,30 @@ export function AccountEditor(props: {
     } else emailInput?.focus();
   }
 
+  async function signIn() {
+    if (busy() || !desktopAvailable) return;
+    setBusy("signin");
+    setError("");
+    setResult(undefined);
+    try {
+      const account = await signInOAuth("microsoft", initial?.id);
+      if (alive) {
+        dialog.close();
+        props.onSaved(account);
+      }
+    } catch (error) {
+      if (alive) setError(errorMessage(error));
+    } finally {
+      if (alive) setBusy(null);
+    }
+  }
+
   async function submit(action: "test" | "save") {
     if (busy()) return;
+    if (newOAuthAccount()) {
+      if (action === "save") await signIn();
+      return;
+    }
     if (mode() === "authcode") {
       const email = draft().email.trim();
       if (email && !authCodeProviderFor(email)) {
@@ -225,7 +269,9 @@ export function AccountEditor(props: {
     const input =
       mode() === "authcode"
         ? authCodeSubmission(draft())
-        : accountInputForSubmission(draft());
+        : mode() === "oauth"
+          ? oauthEditSubmission(draft())
+          : accountInputForSubmission(draft());
     setBusy(action);
     setError("");
     setResult(undefined);
@@ -535,6 +581,73 @@ export function AccountEditor(props: {
     );
   }
 
+  function oauthFields() {
+    const configured = () => microsoft()?.configured ?? false;
+    return (
+      <div class="auth-fields oauth-fields">
+        <div class="auth-guide">
+          <strong>使用微软账户登录</strong>
+          <p>
+            适用于 Outlook.com、Hotmail、Live 邮箱，以及 Microsoft 365
+            工作或学校账户。
+          </p>
+          <ol>
+            <li>点击下方按钮，在系统浏览器中打开微软登录页面。</li>
+            <li>登录账户，并同意 WispMail 读取和发送你的邮件。</li>
+            <li>浏览器显示“登录完成”后回到 WispMail，账户会自动验证并保存。</li>
+          </ol>
+          <p class="field-help">
+            WispMail
+            不会看到你的微软密码，只保存微软颁发的授权；你可以随时在微软账户的“隐私”设置中撤销。
+          </p>
+        </div>
+        <Show when={initial}>
+          {(account) => (
+            <>
+              <label>
+                邮箱地址
+                <input
+                  name="email"
+                  type="email"
+                  readonly
+                  value={account().email}
+                />
+              </label>
+              <label>
+                显示名称 <span class="optional">选填</span>
+                <input
+                  name="displayName"
+                  autocomplete="name"
+                  maxlength="100"
+                  placeholder="你的姓名或账户备注"
+                  value={draft().displayName}
+                  onInput={(event) =>
+                    update({ displayName: event.currentTarget.value })
+                  }
+                />
+              </label>
+            </>
+          )}
+        </Show>
+        <Show when={microsoft() && !configured()}>
+          <p class="field-help field-help--warning">
+            此版本未内置微软应用 ID，暂时无法使用微软账户登录。构建方法见
+            docs/OAUTH.md。
+          </p>
+        </Show>
+        <button
+          type="button"
+          class="button button--primary oauth-button"
+          disabled={!desktopAvailable || !configured() || !!busy()}
+          onClick={() => void signIn()}
+        >
+          <Icon name="shield" />
+          {initial ? "重新登录微软账户" : "在浏览器中登录微软账户"}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <dialog
       ref={dialog}
@@ -577,7 +690,9 @@ export function AccountEditor(props: {
             </p>
           </Show>
           <fieldset
-            disabled={busy() === "test" || busy() === "save"}
+            disabled={
+              busy() === "test" || busy() === "save" || busy() === "signin"
+            }
             class="form-fields"
           >
             <div
@@ -598,6 +713,21 @@ export function AccountEditor(props: {
                 <span>
                   <strong>QQ / 网易邮箱</strong>
                   <small>使用授权码登录</small>
+                </span>
+              </button>
+              <button
+                type="button"
+                class="configuration-mode"
+                classList={{
+                  "configuration-mode--selected": mode() === "oauth",
+                }}
+                aria-pressed={mode() === "oauth"}
+                onClick={() => changeMode("oauth")}
+              >
+                <Icon name="globe" />
+                <span>
+                  <strong>Outlook / 微软</strong>
+                  <small>在浏览器中授权登录</small>
                 </span>
               </button>
               <button
@@ -627,11 +757,18 @@ export function AccountEditor(props: {
                 <Icon name="server" />
                 <span>
                   <strong>自建 / 域名邮箱</strong>
-                  <small>手动填写服务器与登录信息</small>
+                  <small>手动填写服务器配置</small>
                 </span>
               </button>
             </div>
-            <Show when={mode() !== "authcode"} fallback={authCodeFields()}>
+            <Show
+              when={mode() === "automatic" || mode() === "manual"}
+              fallback={
+                <Show when={mode() === "oauth"} fallback={authCodeFields()}>
+                  {oauthFields()}
+                </Show>
+              }
+            >
               <Show when={mode() === "manual"}>
                 <p class="field-help manual-help">
                   请填写邮箱服务商或管理员提供的配置。收发信可使用同一服务器，登录用户名也可以与邮箱地址不同。
@@ -683,9 +820,23 @@ export function AccountEditor(props: {
                         "已填写该服务商的服务器配置，你也可以手动调整。"}
                     </p>
                     <Show when={config().auth === "oauth2"}>
-                      <p>
-                        该服务商推荐官方授权登录，目前尚未接入。若你的账户支持应用专用密码，可使用下方表单；仅允许官方授权的账户暂时无法连接。
-                      </p>
+                      <Show
+                        when={config().provider === "Outlook"}
+                        fallback={
+                          <p>
+                            该服务商推荐官方授权登录，目前尚未接入。若你的账户支持应用专用密码，可使用下方表单；仅允许官方授权的账户暂时无法连接。
+                          </p>
+                        }
+                      >
+                        <p>微软邮箱已不再支持密码登录，请使用微软账户授权。</p>
+                        <button
+                          type="button"
+                          class="button button--secondary"
+                          onClick={() => changeMode("oauth")}
+                        >
+                          改用微软账户登录
+                        </button>
+                      </Show>
                     </Show>
                   </div>
                 )}
@@ -728,7 +879,22 @@ export function AccountEditor(props: {
                   ? "正在识别服务器配置…"
                   : busy() === "test"
                     ? "正在分别验证 IMAP 和 SMTP 登录，请稍候…"
-                    : "正在验证连接并安全保存账户，请稍候…"}
+                    : busy() === "signin"
+                      ? "请在打开的浏览器窗口中登录并同意授权，完成后会自动验证并保存…"
+                      : "正在验证连接并安全保存账户，请稍候…"}
+                <Show when={busy() === "signin"}>
+                  <button
+                    type="button"
+                    class="button button--secondary"
+                    onClick={() =>
+                      void cancelOAuthSignIn().catch((error) =>
+                        setError(errorMessage(error)),
+                      )
+                    }
+                  >
+                    取消登录
+                  </button>
+                </Show>
               </p>
             </Show>
             <Show when={result()}>
@@ -765,24 +931,30 @@ export function AccountEditor(props: {
           </Show>
         </div>
         <footer class="dialog-footer">
-          <span>保存时会再次验证收发信连接</span>
-          <div class="button-group">
-            <button
-              class="button button--secondary"
-              type="button"
-              disabled={!!busy() || !desktopAvailable}
-              onClick={() => void submit("test")}
-            >
-              测试连接
-            </button>
-            <button
-              class="button button--primary"
-              type="submit"
-              disabled={!!busy() || !desktopAvailable}
-            >
-              {busy() === "save" ? "验证并保存中…" : "验证并保存"}
-            </button>
-          </div>
+          <span>
+            {newOAuthAccount()
+              ? "登录完成后会自动验证收发信连接"
+              : "保存时会再次验证收发信连接"}
+          </span>
+          <Show when={!newOAuthAccount()}>
+            <div class="button-group">
+              <button
+                class="button button--secondary"
+                type="button"
+                disabled={!!busy() || !desktopAvailable}
+                onClick={() => void submit("test")}
+              >
+                测试连接
+              </button>
+              <button
+                class="button button--primary"
+                type="submit"
+                disabled={!!busy() || !desktopAvailable}
+              >
+                {busy() === "save" ? "验证并保存中…" : "验证并保存"}
+              </button>
+            </div>
+          </Show>
         </footer>
       </form>
     </dialog>

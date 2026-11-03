@@ -31,6 +31,7 @@ let delayBody = false;
 let activeAccount = "fixture-work";
 let lastSent: { accountId: string; message: ComposeMessage; messageId: string } | null = null;
 let sentCount = 0;
+let oauthCancel: (() => void) | undefined;
 let dispose: (() => void) | undefined;
 
 const accounts: Account[] = [
@@ -287,6 +288,7 @@ async function mockInvoke(command: string, args: Args = {}): Promise<unknown> {
         const email = String(args.email ?? "");
         if (!email.includes("@")) return null;
         const builtin: Record<string, [string, string, string]> = { "qq.com": ["QQ 邮箱", "imap.qq.com", "smtp.qq.com"], "163.com": ["网易 163 邮箱", "imap.163.com", "smtp.163.com"] };
+        if (email.toLowerCase().endsWith("@outlook.com")) return { provider: "Outlook", source: "builtin", incomingProtocol: "imap", incoming: { host: "outlook.office365.com", port: 993, encryption: "tls" }, outgoing: { host: "smtp-mail.outlook.com", port: 587, encryption: "starttls" }, auth: "oauth2", note: null };
         const known = builtin[email.split("@")[1].toLowerCase()];
         if (known) return { provider: known[0], source: "builtin", incomingProtocol: "imap", incoming: { host: known[1], port: 993, encryption: "tls" }, outgoing: { host: known[2], port: 465, encryption: "tls" }, auth: "password", note: "需先在网页版邮箱设置中开启 IMAP/SMTP 服务，并使用生成的授权码代替登录密码。" };
         return { provider: "本地模拟服务商", source: "guess", incomingProtocol: "imap", incoming: { host: "mail.example.test", port: 993, encryption: "tls" }, outgoing: { host: "mail.example.test", port: 587, encryption: "starttls" }, auth: "password", note: "这是模拟配置，不会连接服务器。" };
@@ -299,6 +301,19 @@ async function mockInvoke(command: string, args: Args = {}): Promise<unknown> {
         const account: Account = { id: input.id || `fixture-${accounts.length + 1}`, email: input.email, displayName: input.displayName, incoming: clone(input.incoming), outgoing: clone(input.outgoing), incomingProtocol: input.incomingProtocol, incomingUsername: input.incomingUsername || input.email, outgoingUsername: input.outgoingUsername || input.email, useSamePassword: input.useSamePassword, auth: input.auth };
         const index = accounts.findIndex((item) => item.id === account.id);
         if (index >= 0) accounts[index] = account; else { accounts.push(account); seedAccount(account); }
+        return clone(account);
+      }
+      case "oauth_providers": return [{ id: "microsoft", name: "Microsoft", configured: true }];
+      case "cancel_oauth_sign_in": { oauthCancel?.(); return null; }
+      case "sign_in_oauth": {
+        assertOnline();
+        // 模拟浏览器登录：稍后返回账户，期间可取消。
+        await new Promise<void>((resolve, reject) => { const timer = setTimeout(resolve, 700); oauthCancel = () => { clearTimeout(timer); reject("已取消登录。"); }; });
+        oauthCancel = undefined;
+        const existing = accounts.find((item) => item.id === args.accountId);
+        const email = existing?.email ?? `fixture-ms${accounts.length + 1}@outlook.com`;
+        const account: Account = { id: existing?.id ?? `fixture-${accounts.length + 1}`, email, displayName: existing?.displayName ?? "模拟微软用户", incoming: { host: "outlook.office365.com", port: 993, encryption: "tls" }, outgoing: { host: "smtp-mail.outlook.com", port: 587, encryption: "starttls" }, incomingProtocol: "imap", incomingUsername: email, outgoingUsername: email, useSamePassword: true, auth: "oauth2" };
+        if (existing) accounts[accounts.indexOf(existing)] = account; else { accounts.push(account); seedAccount(account); }
         return clone(account);
       }
       case "delete_account": {

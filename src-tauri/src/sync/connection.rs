@@ -13,7 +13,7 @@ use lettre::{
     AsyncSmtpTransport, Tokio1Executor,
     transport::smtp::{
         Error as SmtpError,
-        authentication::Credentials,
+        authentication::{Credentials, Mechanism},
         client::{Tls, TlsParameters},
     },
 };
@@ -35,9 +35,10 @@ pub(super) async fn open_imap(
     account: &Account,
     credentials: &AccountCredentials,
 ) -> Result<ImapSession, String> {
-    if account.auth != AuthMethod::Password || account.incoming_protocol != IncomingProtocol::Imap {
-        return Err("当前版本仅支持 IMAP 密码 / 授权码登录。".into());
+    if account.incoming_protocol != IncomingProtocol::Imap {
+        return Err("当前版本仅支持 IMAP 收信。".into());
     }
+    ensure_token_destination(account)?;
     let connector = native_tls::TlsConnector::new()
         .map(TlsConnector::from)
         .map_err(|_| "无法初始化系统 TLS。".to_string())?;
@@ -50,13 +51,37 @@ pub(super) fn smtp_transport(
     account: &Account,
     credentials: &AccountCredentials,
 ) -> Result<AsyncSmtpTransport<Tokio1Executor>, String> {
-    if account.auth != AuthMethod::Password {
-        return Err("当前版本仅支持 SMTP 密码 / 授权码登录。".into());
-    }
+    ensure_token_destination(account)?;
     let parameters = TlsParameters::new(account.outgoing.host.clone())
         .map_err(|_| "SMTP 无法初始化系统 TLS。".to_string())?;
     smtp_transport_with_parameters(account, &credentials.outgoing_password, parameters)
         .map_err(str::to_string)
+}
+
+/// OAuth 访问令牌只能发给服务商自己的服务器。
+fn ensure_token_destination(account: &Account) -> Result<(), String> {
+    if account.auth == AuthMethod::OAuth2 {
+        crate::oauth::provider_for_account(account)?;
+    }
+    Ok(())
+}
+
+/// IMAP XOAUTH2：首次回应发送令牌；登录失败时服务器会再发一次错误说明，回应空行即可结束。
+struct XOAuth2<'a> {
+    user: &'a str,
+    token: &'a str,
+    sent: bool,
+}
+
+impl async_imap::Authenticator for XOAuth2<'_> {
+    type Response = String;
+
+    fn process(&mut self, _challenge: &[u8]) -> Self::Response {
+        if std::mem::replace(&mut self.sent, true) {
+            return String::new();
+        }
+        format!("user={}\x01auth=Bearer {}\x01\x01", self.user, self.token)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -95,8 +120,10 @@ async fn test_connection_with_timeout(
     credentials: &AccountCredentials,
     budget: Duration,
 ) -> ConnectionReport {
-    let unsupported = if account.auth != AuthMethod::Password {
-        Some("当前版本尚未支持 OAuth2，请使用支持密码 / 授权码登录的邮箱。")
+    let unsupported = if account.auth == AuthMethod::OAuth2
+        && crate::oauth::provider_for_account(account).is_err()
+    {
+        Some("OAuth 登录的账户只能连接服务商自己的邮件服务器。")
     } else if account.incoming_protocol != IncomingProtocol::Imap {
         Some("当前版本仅支持 IMAP，POP3 将在后续版本提供。")
     } else {
@@ -231,7 +258,11 @@ pub(super) async fn open_imap_with_connector(
     if server.encryption == Encryption::Tls {
         read_greeting(&mut client).await?;
     }
-    let mut session = authenticate_imap_session(client, account.incoming_login(), password).await?;
+    let mut session = if account.auth == AuthMethod::OAuth2 {
+        authenticate_oauth_session(client, account.incoming_login(), password).await?
+    } else {
+        authenticate_imap_session(client, account.incoming_login(), password).await?
+    };
     if requires_client_id(&server.host) {
         identify_client(&mut session).await;
     }
@@ -292,6 +323,33 @@ where
         })
 }
 
+async fn authenticate_oauth_session<T>(
+    client: Client<T>,
+    username: &str,
+    token: &str,
+) -> Result<Session<T>, &'static str>
+where
+    T: AsyncRead + AsyncWrite + Unpin + Debug + Send,
+{
+    let authenticator = XOAuth2 {
+        user: username,
+        token,
+        sent: false,
+    };
+    client
+        .authenticate("XOAUTH2", authenticator)
+        .await
+        .map_err(|(error, _)| {
+            use async_imap::error::Error;
+            match error {
+                Error::No(_) | Error::Bad(_) => {
+                    "IMAP 拒绝了账户授权。请确认账户已开启 IMAP；若问题持续，请在账户设置中重新登录。"
+                }
+                _ => "IMAP 登录过程中连接中断或响应异常，请稍后重试。",
+            }
+        })
+}
+
 async fn check_smtp(account: &Account, password: &str) -> Result<(), &'static str> {
     validate_smtp_credentials(account.outgoing_login(), password)?;
     if account.outgoing.encryption == Encryption::None {
@@ -335,6 +393,11 @@ pub(super) fn smtp_transport_with_parameters(
             account.outgoing_login().to_owned(),
             password.to_owned(),
         ))
+        .authentication(if account.auth == AuthMethod::OAuth2 {
+            vec![Mechanism::Xoauth2]
+        } else {
+            vec![Mechanism::Plain, Mechanism::Login]
+        })
         .timeout(Some(CONNECTION_TIMEOUT))
         .build::<Tokio1Executor>();
     Ok(transport)
@@ -432,10 +495,13 @@ mod tests {
     #[tokio::test]
     async fn rejects_unsupported_settings_without_connecting() {
         let mut account = account();
+        // OAuth 令牌不能发给服务商以外的服务器：不建立任何连接即拒绝。
         account.auth = AuthMethod::OAuth2;
         let result = test_connection(&account, &credentials()).await;
         assert!(!result.incoming.success && !result.outgoing.success);
-        assert!(result.incoming.message.contains("OAuth2"));
+        assert!(result.incoming.message.contains("OAuth"));
+        assert!(open_imap(&account, &credentials()).await.is_err());
+        assert!(smtp_transport(&account, &credentials()).is_err());
         account.auth = AuthMethod::Password;
         account.incoming_protocol = IncomingProtocol::Pop3;
         assert!(

@@ -30,6 +30,7 @@ async fn connection(
     let permit = state.network_slot(&account_id).await?;
     let (account, credentials) =
         with_accounts(state, move |service| service.load_connection(&account_id)).await?;
+    let credentials = state.live_credentials(&account, credentials).await?;
     Ok((account, credentials, permit))
 }
 

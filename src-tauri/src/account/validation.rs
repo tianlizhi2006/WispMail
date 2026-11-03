@@ -39,6 +39,13 @@ pub(super) fn email_domain(email: &str) -> Option<String> {
     Some(domain.to_ascii_lowercase())
 }
 
+/// 规范化邮箱地址（域名转小写）；地址无效时返回 None。
+pub(crate) fn normalized_email(email: &str) -> Option<String> {
+    let domain = email_domain(email)?;
+    let local = email.trim().split_once('@')?.0;
+    Some(format!("{local}@{domain}"))
+}
+
 fn validate_server(server: &mut ServerConfig, label: &str) -> Result<(), String> {
     server.host = server.host.trim().to_ascii_lowercase();
     if server.host.parse::<IpAddr>().is_err() && !valid_dns_name(&server.host) {
@@ -95,11 +102,31 @@ pub(super) fn validate_input(input: &mut AccountInput) -> Result<(), String> {
     if input.incoming_protocol != IncomingProtocol::Imap {
         return Err("当前版本仅支持 IMAP 收信，POP3 将在后续版本提供。".into());
     }
-    if input.auth != AuthMethod::Password {
-        return Err("当前版本仅支持密码或授权码登录，OAuth2 将在后续版本提供。".into());
-    }
     validate_server(&mut input.incoming, "IMAP")?;
     validate_server(&mut input.outgoing, "SMTP")?;
+    if input.auth == AuthMethod::OAuth2 {
+        // OAuth 账户的服务器与登录名固定；令牌由浏览器登录获得，从不经过界面。
+        if !crate::oauth::provider_for(&input.incoming)
+            .is_some_and(|provider| provider.allows_servers(&input.incoming, &input.outgoing))
+        {
+            return Err("OAuth 登录的账户只能使用服务商自己的邮件服务器。".into());
+        }
+        if input
+            .password
+            .as_deref()
+            .is_some_and(|value| !value.is_empty())
+            || input
+                .outgoing_password
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
+        {
+            return Err("OAuth 登录的账户不使用密码，请通过浏览器重新登录。".into());
+        }
+        input.incoming_username = input.email.clone();
+        input.outgoing_username = input.email.clone();
+        input.use_same_password = true;
+        return Ok(());
+    }
     validate_password(input.password.as_deref(), "IMAP")?;
     if !input.use_same_password {
         validate_password(input.outgoing_password.as_deref(), "SMTP")?;

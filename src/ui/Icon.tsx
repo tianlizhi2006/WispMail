@@ -20,8 +20,15 @@ type IconName =
   | "star"
   | "archive"
   | "folder"
-  | "search";
+  | "search"
+  | "globe";
 const paths: Record<IconName, () => JSX.Element> = {
+  globe: () => (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3Z" />
+    </>
+  ),
   star: () => (
     <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9L12 3Z" />
   ),

@@ -12,6 +12,7 @@ mod commands;
 mod inbox_watch;
 pub mod mail;
 mod mail_commands;
+pub mod oauth;
 pub mod storage;
 pub mod sync;
 mod tray;
@@ -70,6 +71,9 @@ pub fn run() {
             commands::test_account_connection,
             commands::save_account,
             commands::delete_account,
+            commands::oauth_providers,
+            commands::sign_in_oauth,
+            commands::cancel_oauth_sign_in,
             mail_commands::list_cached_folders,
             mail_commands::refresh_folders,
             mail_commands::list_cached_messages,

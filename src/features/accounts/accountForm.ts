@@ -1,8 +1,11 @@
 import type { Account, AccountInput } from "../../lib/types.ts";
 import { authCodeProviderFor, normalizeAuthCode } from "./authCodeProviders.ts";
 
-/** authcode：QQ / 网易等授权码邮箱；automatic：其他常见邮箱；manual：自建 / 域名邮箱。 */
-export type ConfigurationMode = "authcode" | "automatic" | "manual";
+/**
+ * authcode：QQ / 网易等授权码邮箱；oauth：在浏览器中登录的微软账户；
+ * automatic：其他常见邮箱；manual：自建 / 域名邮箱。
+ */
+export type ConfigurationMode = "authcode" | "oauth" | "automatic" | "manual";
 
 export function shouldDiscoverConfig(
   mode: ConfigurationMode,
@@ -12,6 +15,7 @@ export function shouldDiscoverConfig(
 ) {
   return (
     mode !== "manual" &&
+    mode !== "oauth" &&
     email.trim().length > 0 &&
     (force || email.trim() !== lastEmail)
   );
@@ -33,7 +37,7 @@ export function createAccountDraft(account?: Account): AccountInput {
     incomingUsername: account?.incomingUsername ?? "",
     outgoingUsername: account?.outgoingUsername ?? "",
     useSamePassword: account?.useSamePassword ?? true,
-    auth: "password",
+    auth: account?.auth ?? "password",
     password: "",
     outgoingPassword: "",
   };
@@ -90,12 +94,26 @@ export function initialModeFor(
   account?: Account,
 ): ConfigurationMode | undefined {
   if (!account) return undefined;
+  if (account.auth === "oauth2") return "oauth";
   return authCodeProviderFor(account.email) &&
     account.useSamePassword &&
     !account.incomingUsername &&
     !account.outgoingUsername
     ? "authcode"
     : "manual";
+}
+
+/** OAuth 账户只能修改显示名称；令牌由浏览器登录获得，从不经过表单。 */
+export function oauthEditSubmission(draft: AccountInput): AccountInput {
+  return {
+    ...accountInputForSubmission(draft),
+    auth: "oauth2",
+    incomingUsername: "",
+    outgoingUsername: "",
+    useSamePassword: true,
+    password: null,
+    outgoingPassword: null,
+  };
 }
 
 /** 每次手动配置或切换模式使旧结果失效，关闭弹窗后也不会写回。 */

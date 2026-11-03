@@ -278,6 +278,12 @@ function App() {
                     >
                       网易邮箱
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditor({ mode: "oauth" })}
+                    >
+                      Outlook
+                    </button>
                     <button type="button" onClick={() => setEditor({})}>
                       iCloud
                     </button>
@@ -367,10 +373,13 @@ function App() {
                     <div>
                       <strong>登录凭据已安全保存</strong>
                       <p>
-                        {account().useSamePassword !== false
-                          ? "收发信共用一个密码。"
-                          : "收发信使用独立密码。"}
-                        凭据保存在系统凭据管理器中，可在编辑账户时替换。
+                        {account().auth === "oauth2"
+                          ? "已通过微软账户授权登录，WispMail 不保存你的密码。授权保存在系统凭据管理器中，失效时可在编辑账户中重新登录。"
+                          : `${
+                              account().useSamePassword !== false
+                                ? "收发信共用一个密码。"
+                                : "收发信使用独立密码。"
+                            }凭据保存在系统凭据管理器中，可在编辑账户时替换。`}
                       </p>
                     </div>
                   </div>

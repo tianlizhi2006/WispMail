@@ -6,6 +6,7 @@ import {
   createAccountDraft,
   createDiscoveryGuard,
   initialModeFor,
+  oauthEditSubmission,
   requiresOutgoingPassword,
   setPasswordSharing,
   shouldDiscoverConfig,
@@ -212,4 +213,38 @@ test("authorization-code mode discovers servers and existing auth-code accounts 
   );
   assert.equal(initialModeFor({ ...qq, email: "me@example.com" }), "manual");
   assert.equal(initialModeFor(undefined), undefined);
+});
+
+test("Microsoft accounts reopen in OAuth mode and editing never submits a secret", () => {
+  const microsoft = {
+    ...storedAccount,
+    email: "me@outlook.com",
+    incoming: { host: "outlook.office365.com", port: 993, encryption: "tls" },
+    outgoing: {
+      host: "smtp-mail.outlook.com",
+      port: 587,
+      encryption: "starttls",
+    },
+    incomingUsername: "me@outlook.com",
+    outgoingUsername: "me@outlook.com",
+    useSamePassword: true,
+    auth: "oauth2",
+  };
+  assert.equal(initialModeFor(microsoft), "oauth");
+  assert.equal(shouldDiscoverConfig("oauth", "me@outlook.com", ""), false);
+  const draft = createAccountDraft(microsoft);
+  assert.equal(draft.auth, "oauth2");
+  const input = oauthEditSubmission({
+    ...draft,
+    displayName: " New name ",
+    password: "typed by mistake",
+    outgoingPassword: "also typed",
+    useSamePassword: false,
+  });
+  assert.equal(input.auth, "oauth2");
+  assert.equal(input.displayName, "New name");
+  assert.equal(input.password, null);
+  assert.equal(input.outgoingPassword, null);
+  assert.equal(input.useSamePassword, true);
+  assert.equal(input.incoming.host, "outlook.office365.com");
 });

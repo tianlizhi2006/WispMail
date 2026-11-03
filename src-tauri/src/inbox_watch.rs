@@ -99,11 +99,14 @@ async fn watch(app: AppHandle, account_id: String, changed: Arc<Notify>) {
             return;
         };
         let started = Instant::now();
-        let _ = sync::watch_inbox(&account, &credentials, WatchTiming::default(), || {
-            changed.notify_one();
-            true
-        })
-        .await;
+        // OAuth 令牌刷新失败（如网络中断）按连接失败处理，稍后重试。
+        if let Ok(credentials) = state.live_credentials(&account, credentials).await {
+            let _ = sync::watch_inbox(&account, &credentials, WatchTiming::default(), || {
+                changed.notify_one();
+                true
+            })
+            .await;
+        }
         if started.elapsed() > STABLE_CONNECTION {
             failures = 0;
         }

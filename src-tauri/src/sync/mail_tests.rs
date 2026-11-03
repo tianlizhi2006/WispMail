@@ -973,3 +973,54 @@ async fn client_id_is_sent_and_a_rejection_keeps_the_session_usable() {
     finish(session, Ok(())).await.unwrap();
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn oauth_accounts_log_in_to_imap_with_xoauth2() {
+    for accepted in [true, false] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = acceptor().accept(stream).await.unwrap();
+            write(&mut stream, "* OK loopback fixture\r\n").await;
+            let mut peer = BufReader::new(stream);
+            let command = line(&mut peer).await;
+            assert!(command.ends_with(" AUTHENTICATE XOAUTH2\r\n"), "{command}");
+            let tag = command.split_whitespace().next().unwrap().to_string();
+            write(peer.get_mut(), "+ \r\n").await;
+            let response = line(&mut peer).await;
+            let decoded = STANDARD.decode(response.trim_end()).unwrap();
+            assert_eq!(
+                decoded,
+                b"user=sender@example.com\x01auth=Bearer access-token\x01\x01"
+            );
+            if accepted {
+                write(peer.get_mut(), &format!("{tag} OK authenticated\r\n")).await;
+                logout(&mut peer).await;
+            } else {
+                // 失败时服务器先发送错误说明，客户端回应空行后才收到 NO。
+                let detail = STANDARD.encode(br#"{"status":"401"}"#);
+                write(peer.get_mut(), &format!("+ {detail}\r\n")).await;
+                assert_eq!(line(&mut peer).await, "\r\n");
+                write(peer.get_mut(), &format!("{tag} NO AUTHENTICATE failed\r\n")).await;
+            }
+        });
+        let mut account = account();
+        account.incoming.port = port;
+        account.incoming_username = String::new();
+        account.auth = AuthMethod::OAuth2;
+        let result = timeout(
+            Duration::from_secs(5),
+            open_imap_with_connector(&account, "access-token", &connector()),
+        )
+        .await
+        .unwrap();
+        if accepted {
+            finish(result.unwrap(), Ok(())).await.unwrap();
+        } else {
+            let error = result.err().unwrap();
+            assert!(error.contains("授权"), "{error}");
+        }
+        server.await.unwrap();
+    }
+}

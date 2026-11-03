@@ -34,7 +34,8 @@ export interface AccountInput {
   incomingUsername: string;
   outgoingUsername: string;
   useSamePassword: boolean;
-  auth: "password";
+  /** oauth2 只用于编辑已登录账户的显示名称；令牌从不经过前端。 */
+  auth: AuthMethod;
   password?: string | null;
   outgoingPassword?: string | null;
 }
@@ -60,6 +61,13 @@ export interface DiscoveredConfig {
   outgoing: ServerConfig;
   auth: AuthMethod;
   note: string | null;
+}
+
+/** 浏览器授权登录的服务商；configured 为 false 表示此版本未内置应用 ID。 */
+export interface OAuthProviderInfo {
+  id: string;
+  name: string;
+  configured: boolean;
 }
 
 /** 邮件列表项（摘要信息，正文按需加载）。 */
