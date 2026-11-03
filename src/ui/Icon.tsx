@@ -14,6 +14,7 @@ export type IconName =
   | "compose"
   | "download"
   | "reply"
+  | "replyAll"
   | "forward"
   | "paperclip"
   | "inbox"
@@ -47,10 +48,13 @@ const paths: Record<IconName, () => JSX.Element> = {
   folder: () => (
     <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
   ),
+  // 两段对称的弧线，箭头落在弧线末端（顺时针刷新）。
   refresh: () => (
     <>
-      <path d="M20 7v5h-5M4 17v-5h5" />
-      <path d="M6 7a7 7 0 0 1 12-2l2 3M4 16l2 3a7 7 0 0 0 12-2" />
+      <path d="M20 11.5A8 8 0 0 0 5.7 6.6L4 8.5" />
+      <path d="M4 4.5v4h4" />
+      <path d="M4 12.5a8 8 0 0 0 14.3 4.9l1.7-1.9" />
+      <path d="M20 19.5v-4h-4" />
     </>
   ),
   compose: () => (
@@ -64,6 +68,7 @@ const paths: Record<IconName, () => JSX.Element> = {
     </>
   ),
   reply: () => <path d="m9 5-6 6 6 6M3 11h10c5 0 8 3 8 8" />,
+  replyAll: () => <path d="m7 6-5 5 5 5M12 6l-5 5 5 5M7 11h7c4 0 7 3 7 8" />,
   forward: () => <path d="m15 5 6 6-6 6m6-6H11c-5 0-8 3-8 8" />,
   paperclip: () => (
     <path d="m9 12 6-6a3 3 0 0 1 4 4l-9 9a5 5 0 0 1-7-7L13 2m3 6-8 8a1 1 0 0 1-2-2l8-8" />

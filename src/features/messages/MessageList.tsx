@@ -12,7 +12,7 @@ import type {
   MessageSummary,
   OrganizeAction,
 } from "../../lib/types";
-import { formatMailDate, messageKey } from "./mailHelpers";
+import { formatMailDate, messageKey, senderName } from "./mailHelpers";
 import { Icon } from "../../ui/Icon";
 
 export function MessageList(props: {
@@ -302,20 +302,28 @@ export function MessageList(props: {
                   "message-row--unread": message.unread,
                 }}
               >
-                <Show when={!props.searching}>
-                  <input
-                    type="checkbox"
-                    class="row-check"
-                    checked={isChecked(message)}
-                    disabled={props.batchBusy}
-                    aria-label={`选择邮件：${message.subject || "（无主题）"}`}
-                    onClick={(event) => {
-                      props.onToggleCheck(message, event.shiftKey);
-                      // 范围选择可能不改变本项状态，手动与数据保持一致。
-                      event.currentTarget.checked = isChecked(message);
-                    }}
+                {/* 左侧一列：平时显示未读圆点，悬停或多选时显示复选框。 */}
+                <span class="row-lead">
+                  <span
+                    class="unread-dot"
+                    classList={{ "unread-dot--visible": message.unread }}
+                    aria-hidden="true"
                   />
-                </Show>
+                  <Show when={!props.searching}>
+                    <input
+                      type="checkbox"
+                      class="row-check"
+                      checked={isChecked(message)}
+                      disabled={props.batchBusy}
+                      aria-label={`选择邮件：${message.subject || "（无主题）"}`}
+                      onClick={(event) => {
+                        props.onToggleCheck(message, event.shiftKey);
+                        // 范围选择可能不改变本项状态，手动与数据保持一致。
+                        event.currentTarget.checked = isChecked(message);
+                      }}
+                    />
+                  </Show>
+                </span>
                 <button
                   type="button"
                   class="message-row-open"
@@ -342,8 +350,8 @@ export function MessageList(props: {
                   }}
                 >
                   <div class="message-row-top">
-                    <span class="message-sender">
-                      {message.from || "未知发件人"}
+                    <span class="message-sender" title={message.from}>
+                      {senderName(message.from) || "未知发件人"}
                     </span>
                     <Show when={props.searching && props.folderOf}>
                       <span class="row-folder">
@@ -353,10 +361,6 @@ export function MessageList(props: {
                     <time>{formatMailDate(message.date)}</time>
                   </div>
                   <div class="message-row-subject">
-                    <span
-                      class="unread-dot"
-                      classList={{ "unread-dot--visible": message.unread }}
-                    />
                     <strong>{message.subject || "（无主题）"}</strong>
                     <Show when={message.flagged}>
                       <Icon name="star" class="row-star" />

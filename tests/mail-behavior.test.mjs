@@ -17,6 +17,7 @@ import {
   mergeMessagePages,
   messageKey,
   moveTargets,
+  senderName,
   visibleFolders,
   refreshFirstPage,
   parseAddresses,
@@ -651,4 +652,12 @@ test("system folders stay hidden from the folder pane and move targets unless sh
     "the selected folder never disappears",
   );
   assert.deepEqual(names(moveTargets(folders, "INBOX")), ["Projects"]);
+});
+
+test("the message list shows only the sender's name, falling back to the address", () => {
+  assert.equal(senderName("测试同事 <colleague@example.test>"), "测试同事");
+  assert.equal(senderName('"Alice, Ops" <alice@example.com>'), "Alice, Ops");
+  assert.equal(senderName("<noreply@example.com>"), "noreply@example.com");
+  assert.equal(senderName("bob@example.com"), "bob@example.com");
+  assert.equal(senderName(""), "");
 });

@@ -870,14 +870,6 @@ export function MailWorkspace(props: {
           <Icon name="settings" />
           邮箱账户与设置
         </button>
-        <div class="mail-local-note">
-          <Icon name="shield" />
-          <span>
-            邮件缓存在本机
-            <br />
-            离线可读已下载正文
-          </span>
-        </div>
       </aside>
       <MessageList
         title={folder()?.displayName || folder()?.name || ""}

@@ -54,13 +54,13 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 11px 10px;
+  padding: 8px 10px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 7px;
   text-align: left;
   font-size: 12px;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 .folder-item svg {
   width: 17px;
@@ -118,19 +118,6 @@
   margin-top: 20px;
   font-size: 11px;
   padding-inline: 8px;
-}
-.mail-local-note {
-  margin: 15px 8px 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 10px;
-  color: var(--text-muted);
-  line-height: 1.7;
-}
-.mail-local-note svg {
-  width: 15px;
-  height: 15px;
 }
 .message-list-pane {
   min-width: 0;
@@ -241,11 +228,26 @@
   text-align: left;
   cursor: pointer;
 }
-.row-check {
+.row-lead {
+  position: relative;
   flex-shrink: 0;
   width: 14px;
+  height: 16px;
+}
+.row-lead .unread-dot {
+  position: absolute;
+  top: 6px;
+  left: 4px;
+  width: 6px;
+  height: 6px;
+  transition: opacity 0.12s;
+}
+.row-check {
+  position: absolute;
+  inset: 1px 0 0;
+  width: 14px;
   height: 14px;
-  margin: 1px 0 0;
+  margin: 0;
   accent-color: var(--accent);
   cursor: pointer;
   opacity: 0;
@@ -253,8 +255,15 @@
 }
 .message-row:hover .row-check,
 .row-check:focus-visible,
+.row-check:checked,
 .message-list--selecting .row-check {
   opacity: 1;
+}
+.message-row:hover .row-lead:has(.row-check) .unread-dot,
+.row-lead:has(.row-check:focus-visible) .unread-dot,
+.row-lead:has(.row-check:checked) .unread-dot,
+.message-list--selecting .unread-dot {
+  opacity: 0;
 }
 .batch-bar {
   display: flex;
@@ -911,6 +920,10 @@
   }
   .reader-toolbar .button {
     padding: 6px 8px;
+  }
+  /* 窄窗口下回复 / 转发只显示图标，悬停可见文字提示。 */
+  .reader-toolbar .button-label {
+    display: none;
   }
   .reader-header {
     padding: 20px;

@@ -510,6 +510,13 @@ export function removeHits(
   return { hits: remaining, next: after ?? before };
 }
 
+/** 列表中只显示发件人名称；没有名称时显示地址。 */
+export function senderName(from: string): string {
+  const match = /^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/.exec(from);
+  if (!match) return from.trim();
+  return match[1].trim() || match[2].trim();
+}
+
 /** 可作为"移动到"目标的文件夹：可选择、未隐藏且不是当前文件夹。 */
 export function moveTargets<
   F extends { name: string; selectable: boolean; hidden?: boolean },

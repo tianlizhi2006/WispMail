@@ -139,26 +139,32 @@ export function MessageView(props: {
           <button
             type="button"
             class="button button--secondary"
+            title="回复"
             onClick={() => props.onReply(false)}
           >
             <Icon name="reply" />
-            回复
+            <span class="button-label">回复</span>
           </button>
           <button
             type="button"
             class="button button--secondary"
+            title="全部回复"
             onClick={() => props.onReply(true)}
           >
-            全部回复
+            <Icon name="replyAll" />
+            <span class="button-label">全部回复</span>
           </button>
           <button
             type="button"
             class="button button--secondary"
+            title="转发"
             disabled={props.forwardBusy}
             onClick={props.onForward}
           >
             <Icon name="forward" />
-            {props.forwardBusy ? "准备中…" : "转发"}
+            <span class="button-label">
+              {props.forwardBusy ? "准备中…" : "转发"}
+            </span>
           </button>
         </div>
         <div class="reader-actions">
