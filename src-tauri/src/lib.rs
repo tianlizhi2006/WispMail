@@ -74,6 +74,7 @@ pub fn run() {
             commands::oauth_providers,
             commands::sign_in_oauth,
             commands::cancel_oauth_sign_in,
+            commands::submit_oauth_redirect,
             mail_commands::list_cached_folders,
             mail_commands::refresh_folders,
             mail_commands::list_cached_messages,

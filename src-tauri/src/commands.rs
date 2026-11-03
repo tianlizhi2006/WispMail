@@ -217,16 +217,39 @@ pub fn oauth_providers() -> Vec<OAuthProviderInfo> {
 /// 取消进行中的浏览器登录。
 #[tauri::command]
 pub fn cancel_oauth_sign_in(state: tauri::State<'_, AccountsState>) {
-    if let Some(cancel) = state
+    if let Some(pending) = state
         .oauth
         .pending
         .lock()
         .ok()
         .and_then(|mut slot| slot.take())
     {
-        let _ = cancel.send(());
+        let _ = pending.control.send(oauth::SignInControl::Cancel);
     }
 }
+
+/// 浏览器没能回到 WispMail 时，用户粘贴地址栏中的回调地址继续登录。
+#[tauri::command]
+pub fn submit_oauth_redirect(
+    url: String,
+    state: tauri::State<'_, AccountsState>,
+) -> Result<(), String> {
+    let pending = state
+        .oauth
+        .pending
+        .lock()
+        .map_err(|_| "登录服务暂时不可用。".to_string())?;
+    let pending = pending
+        .as_ref()
+        .ok_or("当前没有进行中的登录，请重新点击登录。")?;
+    let code = oauth::code_from_pasted_redirect(&url, &pending.state)?;
+    pending
+        .control
+        .send(oauth::SignInControl::Code(code))
+        .map_err(|_| "登录已结束，请重新点击登录。".to_string())
+}
+
+pub const OAUTH_PROGRESS_EVENT: &str = "oauth-progress";
 
 /// 在系统浏览器中登录服务商账户，验证收发信后保存。传入 `account_id` 时为已有账户重新授权，
 /// 登录的必须是同一个邮箱。
@@ -243,29 +266,42 @@ pub async fn sign_in_oauth(
         Some(id) => Some(with_accounts(&state, move |service| service.get_account(&id)).await?),
         None => None,
     };
-    let (cancel, cancelled) = tokio::sync::oneshot::channel();
+    use tauri::Emitter;
+    let (control, controls) = tokio::sync::mpsc::unbounded_channel();
+    let sign_in_state = oauth::random_token();
     {
         let mut pending = state
             .oauth
             .pending
             .lock()
             .map_err(|_| "登录服务暂时不可用。".to_string())?;
-        if pending.as_ref().is_some_and(|sender| !sender.is_closed()) {
+        if pending
+            .as_ref()
+            .is_some_and(|pending| !pending.control.is_closed())
+        {
             return Err("已有一个登录正在进行，请先在浏览器中完成或取消。".into());
         }
-        *pending = Some(cancel);
+        *pending = Some(oauth::PendingSignIn {
+            control,
+            state: sign_in_state.clone(),
+        });
     }
     let opener = app.clone();
+    let progress = |stage: oauth::SignInStage| {
+        let _ = app.emit(OAUTH_PROGRESS_EVENT, stage);
+    };
     let signed_in = oauth::sign_in(
         provider,
         existing.as_ref().map(|account| account.email.as_str()),
+        &sign_in_state,
         move |url| {
             opener
                 .opener()
                 .open_url(url, None::<&str>)
                 .map_err(|_| "无法打开系统浏览器，请检查默认浏览器设置。".to_string())
         },
-        cancelled,
+        controls,
+        progress,
     )
     .await;
     if let Ok(mut pending) = state.oauth.pending.lock() {
@@ -304,8 +340,10 @@ pub async fn sign_in_oauth(
         outgoing: provider.outgoing(identity.personal),
         auth: AuthMethod::OAuth2,
     };
+    progress(oauth::SignInStage::Verifying);
     let report = sync::test_connection(&account, &access_credentials(&tokens.access_token)).await;
     ensure_verified(report)?;
+    progress(oauth::SignInStage::Saving);
     let refresh_token = tokens.refresh_token.clone().unwrap_or_default();
     let stored = AccountCredentials {
         incoming_password: refresh_token.clone(),

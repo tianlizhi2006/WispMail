@@ -32,6 +32,7 @@ let activeAccount = "fixture-work";
 let lastSent: { accountId: string; message: ComposeMessage; messageId: string } | null = null;
 let sentCount = 0;
 let oauthCancel: (() => void) | undefined;
+let oauthPasted: (() => void) | undefined;
 let dispose: (() => void) | undefined;
 
 const accounts: Account[] = [
@@ -305,11 +306,18 @@ async function mockInvoke(command: string, args: Args = {}): Promise<unknown> {
       }
       case "oauth_providers": return [{ id: "microsoft", name: "Microsoft", configured: true }];
       case "cancel_oauth_sign_in": { oauthCancel?.(); return null; }
+      case "submit_oauth_redirect": {
+        if (!oauthPasted) throw "当前没有进行中的登录，请重新点击登录。";
+        if (!/^http:\/\/localhost:\d+\/\?.*code=/.test(String(args.url))) throw "这不是本次登录的回调地址。请复制浏览器地址栏中以 http://localhost 开头、包含 code= 的完整地址。";
+        oauthPasted(); return null;
+      }
       case "sign_in_oauth": {
         assertOnline();
         // 模拟浏览器登录：稍后返回账户，期间可取消。
-        await new Promise<void>((resolve, reject) => { const timer = setTimeout(resolve, 700); oauthCancel = () => { clearTimeout(timer); reject("已取消登录。"); }; });
-        oauthCancel = undefined;
+        // window.__oauthDelay 可模拟浏览器回调迟迟不到达（例如被代理拦截），此时只能粘贴回调地址。
+        await new Promise<void>((resolve, reject) => { const timer = setTimeout(resolve, (window as unknown as { __oauthDelay?: number }).__oauthDelay ?? 700); oauthPasted = () => { clearTimeout(timer); resolve(); }; oauthCancel = () => { clearTimeout(timer); reject("已取消登录。"); }; });
+        oauthCancel = undefined; oauthPasted = undefined;
+        for (const stage of ["exchanging", "verifying", "saving"]) { emitMock("oauth-progress", stage); await new Promise((resolve) => setTimeout(resolve, 150)); }
         const existing = accounts.find((item) => item.id === args.accountId);
         const email = existing?.email ?? `fixture-ms${accounts.length + 1}@outlook.com`;
         const account: Account = { id: existing?.id ?? `fixture-${accounts.length + 1}`, email, displayName: existing?.displayName ?? "模拟微软用户", incoming: { host: "outlook.office365.com", port: 993, encryption: "tls" }, outgoing: { host: "smtp-mail.outlook.com", port: 587, encryption: "starttls" }, incomingProtocol: "imap", incomingUsername: email, outgoingUsername: email, useSamePassword: true, auth: "oauth2" };

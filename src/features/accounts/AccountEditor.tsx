@@ -12,10 +12,13 @@ import {
   discoverConfig,
   errorMessage,
   oauthProviders,
+  onOAuthProgress,
   openEmailLink,
   saveAccount,
   signInOAuth,
+  submitOAuthRedirect,
   testAccountConnection,
+  type OAuthStage,
 } from "../../lib/api";
 import type {
   Account,
@@ -72,6 +75,12 @@ export function AccountEditor(props: {
   /** 微软账户登录；undefined 表示尚未从后端读取。 */
   const [microsoft, setMicrosoft] = createSignal<OAuthProviderInfo>();
   const newOAuthAccount = () => mode() === "oauth" && !initial;
+  const [oauthStage, setOAuthStage] = createSignal<OAuthStage>();
+  const [pastedRedirect, setPastedRedirect] = createSignal("");
+  const [pasteError, setPasteError] = createSignal("");
+  const stopProgress = onOAuthProgress((stage) => {
+    if (busy() === "signin") setOAuthStage(stage);
+  });
   const [error, setError] = createSignal("");
   const [result, setResult] = createSignal<ConnectionReport>();
   let dialog!: HTMLDialogElement;
@@ -105,6 +114,7 @@ export function AccountEditor(props: {
     discovery.invalidate();
     clearSecrets();
     if (busy() === "signin") void cancelOAuthSignIn().catch(() => undefined);
+    stopProgress();
   });
 
   function close() {
@@ -231,6 +241,9 @@ export function AccountEditor(props: {
   async function signIn() {
     if (busy() || !desktopAvailable) return;
     setBusy("signin");
+    setOAuthStage(undefined);
+    setPastedRedirect("");
+    setPasteError("");
     setError("");
     setResult(undefined);
     try {
@@ -243,6 +256,31 @@ export function AccountEditor(props: {
       if (alive) setError(errorMessage(error));
     } finally {
       if (alive) setBusy(null);
+    }
+  }
+
+  async function submitRedirect() {
+    const url = pastedRedirect().trim();
+    if (!url) return;
+    setPasteError("");
+    try {
+      await submitOAuthRedirect(url);
+      setPastedRedirect("");
+    } catch (error) {
+      if (alive) setPasteError(errorMessage(error));
+    }
+  }
+
+  function signInMessage() {
+    switch (oauthStage()) {
+      case "exchanging":
+        return "已收到微软的授权，正在换取登录凭据…";
+      case "verifying":
+        return "正在用微软账户验证收信（IMAP）和发信（SMTP）…";
+      case "saving":
+        return "验证成功，正在保存账户…";
+      default:
+        return "请在打开的浏览器窗口中登录并同意授权，完成后会自动验证并保存…";
     }
   }
 
@@ -880,7 +918,7 @@ export function AccountEditor(props: {
                   : busy() === "test"
                     ? "正在分别验证 IMAP 和 SMTP 登录，请稍候…"
                     : busy() === "signin"
-                      ? "请在打开的浏览器窗口中登录并同意授权，完成后会自动验证并保存…"
+                      ? signInMessage()
                       : "正在验证连接并安全保存账户，请稍候…"}
                 <Show when={busy() === "signin"}>
                   <button
@@ -896,6 +934,44 @@ export function AccountEditor(props: {
                   </button>
                 </Show>
               </p>
+            </Show>
+            <Show when={busy() === "signin" && !oauthStage()}>
+              <div class="oauth-paste">
+                <p>
+                  浏览器已显示包含 <code>code=</code>{" "}
+                  的地址，但这里没有反应？可能是代理软件或浏览器插件拦截了本机地址。请复制浏览器地址栏中的完整地址粘贴到下面：
+                </p>
+                <div class="oauth-paste-row">
+                  <input
+                    name="oauthRedirect"
+                    type="text"
+                    autocomplete="off"
+                    spellcheck={false}
+                    placeholder="http://localhost:…/?code=…"
+                    value={pastedRedirect()}
+                    onInput={(event) =>
+                      setPastedRedirect(event.currentTarget.value)
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void submitRedirect();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    class="button button--secondary"
+                    disabled={!pastedRedirect().trim()}
+                    onClick={() => void submitRedirect()}
+                  >
+                    继续登录
+                  </button>
+                </div>
+                <Show when={pasteError()}>
+                  <p class="field-help field-help--warning">{pasteError()}</p>
+                </Show>
+              </div>
             </Show>
             <Show when={result()}>
               {(report) => (

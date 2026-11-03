@@ -40,25 +40,39 @@ export interface MailChanged {
   newCount: number;
 }
 
-/** 订阅收件箱实时变化；返回取消订阅函数。非桌面环境下不做任何事。 */
-export function onMailChanged(
-  handler: (event: MailChanged) => void,
-): () => void {
+/** 订阅后端事件；返回取消订阅函数。非桌面环境下不做任何事。 */
+function subscribe<T>(name: string, handler: (payload: T) => void) {
   if (!desktopAvailable) return () => {};
   let stopped = false;
   let unlisten: (() => void) | undefined;
-  listen<MailChanged>("mail-changed", (event) => handler(event.payload))
+  listen<T>(name, (event) => handler(event.payload))
     .then((stop) => {
       if (stopped) stop();
       else unlisten = stop;
     })
     .catch(() => {
-      /* 事件通道不可用时仍可手动刷新。 */
+      /* 事件通道不可用时界面仍可手动操作。 */
     });
   return () => {
     stopped = true;
     unlisten?.();
   };
+}
+
+/** 订阅收件箱实时变化。 */
+export function onMailChanged(
+  handler: (event: MailChanged) => void,
+): () => void {
+  return subscribe("mail-changed", handler);
+}
+
+/** 浏览器登录收到授权之后的步骤。 */
+export type OAuthStage = "exchanging" | "verifying" | "saving";
+
+export function onOAuthProgress(
+  handler: (stage: OAuthStage) => void,
+): () => void {
+  return subscribe("oauth-progress", handler);
 }
 
 export function errorMessage(error: unknown): string {
@@ -117,6 +131,11 @@ export function signInOAuth(
 
 export function cancelOAuthSignIn(): Promise<void> {
   return command<void>("cancel_oauth_sign_in");
+}
+
+/** 浏览器没能回到 WispMail 时，提交地址栏中的回调地址继续登录。 */
+export function submitOAuthRedirect(url: string): Promise<void> {
+  return command<void>("submit_oauth_redirect", { url });
 }
 
 export function listCachedFolders(accountId: string): Promise<MailFolder[]> {

@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::oneshot,
+    sync::mpsc,
     time::timeout,
 };
 
@@ -146,7 +146,7 @@ pub fn provider_infos() -> Vec<OAuthProviderInfo> {
 
 // ---------------------------------------------------------------- PKCE 与授权地址
 
-fn random_token() -> String {
+pub(crate) fn random_token() -> String {
     let mut bytes = [0u8; 32];
     bytes[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
     bytes[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
@@ -330,6 +330,59 @@ struct TokenResponse {
 #[derive(Deserialize)]
 struct TokenError {
     error: String,
+    #[serde(default)]
+    error_description: String,
+}
+
+/// 令牌请求的用途：首次登录用授权码换取，之后用刷新令牌更新。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Grant {
+    Code,
+    Refresh,
+}
+
+/// 从微软的错误说明中取出错误码（如 AADSTS7000218），便于对照文档排查。
+fn error_code(description: &str) -> Option<&str> {
+    let start = description.find("AADSTS")?;
+    let rest = &description[start..];
+    let end = rest[6..]
+        .find(|c: char| !c.is_ascii_digit())
+        .map_or(rest.len(), |index| index + 6);
+    (end > 6).then(|| &rest[..end])
+}
+
+fn token_error_message(
+    provider: &OAuthProvider,
+    grant: Grant,
+    error: &str,
+    description: &str,
+) -> String {
+    let code = error_code(description);
+    let message = match (code, error) {
+        // 应用被注册为“Web”或“单页应用”平台时，桌面应用无法换取令牌。
+        (Some("AADSTS7000218" | "AADSTS9002327" | "AADSTS700025"), _) => {
+            "应用注册的平台类型不正确：请在 Entra 的“身份验证”中把 http://localhost 放在“移动和桌面应用程序”平台下，并开启“允许公共客户端流”。".to_string()
+        }
+        (Some("AADSTS50011"), _) => {
+            "回调地址未登记：请在 Entra 应用的“移动和桌面应用程序”平台中添加 http://localhost。".to_string()
+        }
+        (_, "invalid_grant" | "interaction_required") if grant == Grant::Code => {
+            "授权码无效或已过期，请重新登录。".to_string()
+        }
+        (_, "invalid_grant" | "interaction_required") => format!(
+            "{} 账户的授权已失效（可能修改了密码或撤销了授权），请在账户设置中重新登录。",
+            provider.name
+        ),
+        (_, "invalid_client" | "unauthorized_client") => {
+            "此版本内置的应用 ID 无效或未正确配置，请联系开发者。".to_string()
+        }
+        _ => format!("{} 登录服务拒绝了请求，请稍后重试。", provider.name),
+    };
+    match code {
+        Some(code) => format!("{message}（微软错误码 {code}）"),
+        None if !error.is_empty() => format!("{message}（{error}）"),
+        None => message,
+    }
 }
 
 pub struct Tokens {
@@ -343,7 +396,11 @@ fn valid_token(value: &str) -> bool {
     !value.is_empty() && value.len() <= 16 * 1024 && !value.chars().any(char::is_control)
 }
 
-async fn token_request(provider: &OAuthProvider, form: &[(&str, &str)]) -> Result<Tokens, String> {
+async fn token_request(
+    provider: &OAuthProvider,
+    grant: Grant,
+    form: &[(&str, &str)],
+) -> Result<Tokens, String> {
     let client = reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .build()
@@ -360,19 +417,10 @@ async fn token_request(provider: &OAuthProvider, form: &[(&str, &str)]) -> Resul
         .await
         .map_err(|_| format!("{} 登录服务响应中断，请重试。", provider.name))?;
     if !status.is_success() {
-        let error = serde_json::from_slice::<TokenError>(&body)
-            .map(|error| error.error)
-            .unwrap_or_default();
-        return Err(match error.as_str() {
-            "invalid_grant" | "interaction_required" => format!(
-                "{} 账户的授权已失效（可能修改了密码或撤销了授权），请在账户设置中重新登录。",
-                provider.name
-            ),
-            "invalid_client" | "unauthorized_client" => {
-                "此版本内置的应用 ID 无效或未正确配置，请联系开发者。".into()
-            }
-            _ => format!("{} 登录服务暂时不可用，请稍后重试。", provider.name),
-        });
+        let (error, description) = serde_json::from_slice::<TokenError>(&body)
+            .map(|error| (error.error, error.error_description))
+            .unwrap_or_else(|_| (format!("HTTP {}", status.as_u16()), String::new()));
+        return Err(token_error_message(provider, grant, &error, &description));
     }
     let tokens: TokenResponse = serde_json::from_slice(&body)
         .map_err(|_| format!("{} 登录服务返回了无法识别的结果。", provider.name))?;
@@ -398,6 +446,7 @@ pub async fn refresh(provider: &OAuthProvider, refresh_token: &str) -> Result<To
         .ok_or("此版本未内置应用 ID，无法刷新登录状态。")?;
     token_request(
         provider,
+        Grant::Refresh,
         &[
             ("client_id", client_id.as_str()),
             ("grant_type", "refresh_token"),
@@ -456,13 +505,54 @@ pub struct SignedIn {
     pub tokens: Tokens,
 }
 
-/// 完整的浏览器登录：打开授权页，等待回调，用授权码换取令牌。
-/// `open` 负责用系统浏览器打开地址；`cancel` 收到信号时放弃等待。
+/// 进行中的浏览器登录可以接收的指令。
+pub enum SignInControl {
+    Cancel,
+    /// 用户从浏览器地址栏粘贴回来的授权码（已核对 state）。
+    Code(String),
+}
+
+pub(crate) struct PendingSignIn {
+    pub(crate) control: mpsc::UnboundedSender<SignInControl>,
+    pub(crate) state: String,
+}
+
+/// 浏览器停在回调地址却没有回到 WispMail 时（如代理插件拦截了 localhost），
+/// 用户可以粘贴地址栏中的完整地址。只接受本机回调地址和本次登录的 state。
+pub(crate) fn code_from_pasted_redirect(pasted: &str, state: &str) -> Result<String, String> {
+    let invalid = || {
+        "这不是本次登录的回调地址。请复制浏览器地址栏中以 http://localhost 开头、包含 code= 的完整地址。".to_string()
+    };
+    let url = url::Url::parse(pasted.trim()).map_err(|_| invalid())?;
+    if !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")) {
+        return Err(invalid());
+    }
+    let target = format!("{}?{}", url.path(), url.query().unwrap_or_default());
+    match callback_result(&target, state) {
+        Callback::Code(code) => Ok(code),
+        Callback::Denied(message) => Err(message),
+        Callback::Ignore => Err(invalid()),
+    }
+}
+
+/// 登录进度，界面据此提示当前步骤。
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SignInStage {
+    Exchanging,
+    Verifying,
+    Saving,
+}
+
+/// 完整的浏览器登录：打开授权页，等待回调（或用户粘贴的回调地址），用授权码换取令牌。
+/// `open` 负责用系统浏览器打开地址；`control` 用于取消或提交粘贴的授权码。
 pub async fn sign_in(
     provider: &OAuthProvider,
     login_hint: Option<&str>,
+    state: &str,
     open: impl FnOnce(String) -> Result<(), String>,
-    cancel: oneshot::Receiver<()>,
+    mut control: mpsc::UnboundedReceiver<SignInControl>,
+    progress: impl Fn(SignInStage),
 ) -> Result<SignedIn, String> {
     let client_id = provider.client_id().ok_or_else(|| {
         format!(
@@ -473,23 +563,27 @@ pub async fn sign_in(
     let loopback = Loopback::bind().await?;
     let redirect_uri = loopback.redirect_uri();
     let verifier = random_token();
-    let state = random_token();
     open(authorize_url(
         provider,
         &client_id,
         &redirect_uri,
         &pkce_challenge(&verifier),
-        &state,
+        state,
         login_hint,
     ))?;
     let code = tokio::select! {
-        result = timeout(SIGN_IN_TIMEOUT, loopback.wait_for_code(&state)) => {
+        result = timeout(SIGN_IN_TIMEOUT, loopback.wait_for_code(state)) => {
             result.map_err(|_| "等待浏览器登录超时，请重新尝试。".to_string())??
         }
-        _ = cancel => return Err("已取消登录。".into()),
+        message = control.recv() => match message {
+            Some(SignInControl::Code(code)) => code,
+            Some(SignInControl::Cancel) | None => return Err("已取消登录。".into()),
+        },
     };
+    progress(SignInStage::Exchanging);
     let tokens = token_request(
         provider,
+        Grant::Code,
         &[
             ("client_id", client_id.as_str()),
             ("grant_type", "authorization_code"),
@@ -535,8 +629,8 @@ impl CachedToken {
 pub struct OAuthState {
     /// 同一时间只刷新一次，避免并发请求互相作废对方的刷新令牌。
     pub(crate) tokens: tokio::sync::Mutex<HashMap<String, CachedToken>>,
-    /// 进行中的浏览器登录；发送信号即可取消。
-    pub(crate) pending: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    /// 进行中的浏览器登录。
+    pub(crate) pending: std::sync::Mutex<Option<PendingSignIn>>,
 }
 
 impl OAuthState {
@@ -587,6 +681,60 @@ mod tests {
         let hinted = authorize_url(&MICROSOFT, "id", "r", "c", "s", Some("me@outlook.com"));
         assert!(hinted.contains("login_hint=me%40outlook.com"));
         assert!(!hinted.contains("prompt="));
+    }
+
+    #[test]
+    fn pasted_redirects_must_be_local_and_match_the_state() {
+        assert_eq!(
+            code_from_pasted_redirect(
+                " http://localhost:51234/?code=M.C5_abc&state=s1&session_state=x ",
+                "s1"
+            ),
+            Ok("M.C5_abc".into())
+        );
+        assert_eq!(
+            code_from_pasted_redirect("http://127.0.0.1:1/?code=c&state=s1", "s1"),
+            Ok("c".into())
+        );
+        for bad in [
+            "http://localhost:51234/?code=c&state=other",
+            "https://evil.test/?code=c&state=s1",
+            "code=c&state=s1",
+            "",
+        ] {
+            assert!(code_from_pasted_redirect(bad, "s1").is_err(), "{bad}");
+        }
+        assert!(
+            code_from_pasted_redirect("http://localhost:1/?error=access_denied&state=s1", "s1")
+                .unwrap_err()
+                .contains("取消")
+        );
+    }
+
+    #[test]
+    fn token_errors_explain_registration_problems_with_the_microsoft_code() {
+        let web_platform = token_error_message(
+            &MICROSOFT,
+            Grant::Code,
+            "invalid_client",
+            "AADSTS7000218: The request body must contain the following parameter: 'client_assertion' or 'client_secret'. Trace ID: x",
+        );
+        assert!(
+            web_platform.contains("移动和桌面应用程序"),
+            "{web_platform}"
+        );
+        assert!(web_platform.ends_with("（微软错误码 AADSTS7000218）"));
+        let expired_code = token_error_message(
+            &MICROSOFT,
+            Grant::Code,
+            "invalid_grant",
+            "AADSTS70008: expired",
+        );
+        assert!(expired_code.starts_with("授权码无效或已过期"));
+        let revoked = token_error_message(&MICROSOFT, Grant::Refresh, "invalid_grant", "");
+        assert!(revoked.contains("重新登录") && revoked.ends_with("（invalid_grant）"));
+        assert_eq!(error_code("x AADSTS50011: y"), Some("AADSTS50011"));
+        assert_eq!(error_code("AADSTS"), None);
     }
 
     #[test]
