@@ -84,6 +84,12 @@ export interface MailFolder {
   kind: string;
 }
 
+/** 本地全文搜索的结果：邮件摘要及所在文件夹。 */
+export interface SearchHit {
+  folder: string;
+  summary: MessageSummary;
+}
+
 export interface MessagePage {
   messages: MessageSummary[];
   hasMore: boolean;

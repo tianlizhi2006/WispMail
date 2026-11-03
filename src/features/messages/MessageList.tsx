@@ -1,4 +1,11 @@
-import { createEffect, createMemo, For, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  For,
+  onCleanup,
+  onMount,
+  Show,
+} from "solid-js";
 import type {
   MailFolder,
   MessageFlag,
@@ -28,9 +35,19 @@ export function MessageList(props: {
   onBatchOrganize: (action: OrganizeAction) => void;
   onRefresh: () => void;
   onLoadMore: () => void;
+  /** 搜索框内容；非空时列表显示搜索结果。 */
+  searchQuery: string;
+  onSearchQuery: (query: string) => void;
+  searching: boolean;
+  /** 搜索结果所在文件夹的显示名称，显示在每封邮件上。 */
+  folderOf?: (message: MessageSummary) => string;
 }) {
   const checkedList = createMemo(() =>
-    props.messages.filter((message) => props.checked.has(messageKey(message))),
+    props.searching
+      ? []
+      : props.messages.filter((message) =>
+          props.checked.has(messageKey(message)),
+        ),
   );
   const selecting = () => checkedList().length > 0;
   const allChecked = () =>
@@ -48,6 +65,21 @@ export function MessageList(props: {
     const partial = selecting() && !allChecked();
     if (checkAll) checkAll.indeterminate = partial;
   });
+  let searchInput: HTMLInputElement | undefined;
+  // Ctrl+F 跳到搜索框（撰写窗口等对话框打开时不拦截）。
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      event.key.toLowerCase() === "f" &&
+      !document.querySelector("dialog[open]")
+    ) {
+      event.preventDefault();
+      searchInput?.focus();
+      searchInput?.select();
+    }
+  };
+  onMount(() => window.addEventListener("keydown", onKeyDown));
+  onCleanup(() => window.removeEventListener("keydown", onKeyDown));
 
   return (
     <section
@@ -57,22 +89,62 @@ export function MessageList(props: {
     >
       <header class="message-list-header">
         <div>
-          <h1>{props.title || "邮件"}</h1>
+          <h1>{props.searching ? "搜索结果" : props.title || "邮件"}</h1>
           <span>
-            {props.messages.length ? `已加载 ${props.messages.length} 封` : ""}
+            {props.searching
+              ? props.loading
+                ? ""
+                : `找到 ${props.messages.length} 封${props.messages.length >= 200 ? "（仅显示最新 200 封）" : ""}`
+              : props.messages.length
+                ? `已加载 ${props.messages.length} 封`
+                : ""}
           </span>
         </div>
-        <button
-          type="button"
-          class="icon-button"
-          aria-label="刷新当前文件夹"
-          title="刷新当前文件夹"
-          disabled={props.loading || props.loadingMore || !props.title}
-          onClick={props.onRefresh}
-        >
-          <Icon name="refresh" />
-        </button>
+        <Show when={!props.searching}>
+          <button
+            type="button"
+            class="icon-button"
+            aria-label="刷新当前文件夹"
+            title="刷新当前文件夹"
+            disabled={props.loading || props.loadingMore || !props.title}
+            onClick={props.onRefresh}
+          >
+            <Icon name="refresh" />
+          </button>
+        </Show>
       </header>
+      <div class="list-search" role="search">
+        <Icon name="search" />
+        <input
+          ref={searchInput}
+          type="search"
+          aria-label="搜索邮件"
+          placeholder="搜索发件人、收件人、主题或正文（Ctrl+F）"
+          maxlength="200"
+          value={props.searchQuery}
+          onInput={(event) => props.onSearchQuery(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && props.searchQuery) {
+              event.preventDefault();
+              props.onSearchQuery("");
+            }
+          }}
+        />
+        <Show when={props.searchQuery}>
+          <button
+            type="button"
+            class="icon-button list-search-clear"
+            aria-label="清除搜索"
+            title="清除搜索（Esc）"
+            onClick={() => {
+              props.onSearchQuery("");
+              searchInput?.focus();
+            }}
+          >
+            <Icon name="close" />
+          </button>
+        </Show>
+      </div>
       <Show when={selecting()}>
         <div class="batch-bar" role="toolbar" aria-label="批量操作">
           <div class="batch-bar-top">
@@ -174,7 +246,7 @@ export function MessageList(props: {
       <Show when={props.loading}>
         <div class="mail-progress" role="status">
           <span class="spinner" />
-          正在同步邮件…
+          {props.searching ? "正在搜索…" : "正在同步邮件…"}
         </div>
       </Show>
       <Show when={props.error}>
@@ -186,23 +258,38 @@ export function MessageList(props: {
         <Show
           when={props.messages.length > 0}
           fallback={
-            <div class="mail-empty">
-              <Icon name="inbox" />
-              <strong>
-                {props.loading
-                  ? "正在读取邮箱"
-                  : props.error
-                    ? "暂无可用的本地邮件"
-                    : "这里还没有邮件"}
-              </strong>
-              <p>
-                {props.loading
-                  ? "首次同步需要一点时间。"
-                  : props.error
-                    ? "恢复连接后点击刷新重试。"
-                    : "选择其他文件夹，或刷新查看新邮件。"}
-              </p>
-            </div>
+            <Show
+              when={!props.searching}
+              fallback={
+                <div class="mail-empty">
+                  <Icon name="search" />
+                  <strong>
+                    {props.loading ? "正在搜索" : "没有找到匹配的邮件"}
+                  </strong>
+                  <p>
+                    搜索范围是已同步到本机的邮件；正文只包含已下载过的邮件。
+                  </p>
+                </div>
+              }
+            >
+              <div class="mail-empty">
+                <Icon name="inbox" />
+                <strong>
+                  {props.loading
+                    ? "正在读取邮箱"
+                    : props.error
+                      ? "暂无可用的本地邮件"
+                      : "这里还没有邮件"}
+                </strong>
+                <p>
+                  {props.loading
+                    ? "首次同步需要一点时间。"
+                    : props.error
+                      ? "恢复连接后点击刷新重试。"
+                      : "选择其他文件夹，或刷新查看新邮件。"}
+                </p>
+              </div>
+            </Show>
           }
         >
           <For each={props.messages}>
@@ -215,24 +302,34 @@ export function MessageList(props: {
                   "message-row--unread": message.unread,
                 }}
               >
-                <input
-                  type="checkbox"
-                  class="row-check"
-                  checked={isChecked(message)}
-                  disabled={props.batchBusy}
-                  aria-label={`选择邮件：${message.subject || "（无主题）"}`}
-                  onClick={(event) => {
-                    props.onToggleCheck(message, event.shiftKey);
-                    // 范围选择可能不改变本项状态，手动与数据保持一致。
-                    event.currentTarget.checked = isChecked(message);
-                  }}
-                />
+                <Show when={!props.searching}>
+                  <input
+                    type="checkbox"
+                    class="row-check"
+                    checked={isChecked(message)}
+                    disabled={props.batchBusy}
+                    aria-label={`选择邮件：${message.subject || "（无主题）"}`}
+                    onClick={(event) => {
+                      props.onToggleCheck(message, event.shiftKey);
+                      // 范围选择可能不改变本项状态，手动与数据保持一致。
+                      event.currentTarget.checked = isChecked(message);
+                    }}
+                  />
+                </Show>
                 <button
                   type="button"
                   class="message-row-open"
                   aria-pressed={isSelected(message)}
-                  title="按住 Ctrl 点击可多选，按住 Shift 点击可连续选择"
+                  title={
+                    props.searching
+                      ? undefined
+                      : "按住 Ctrl 点击可多选，按住 Shift 点击可连续选择"
+                  }
                   onClick={(event) => {
+                    if (props.searching) {
+                      props.onSelect(message);
+                      return;
+                    }
                     if (
                       props.batchBusy &&
                       (event.ctrlKey || event.metaKey || event.shiftKey)
@@ -248,6 +345,11 @@ export function MessageList(props: {
                     <span class="message-sender">
                       {message.from || "未知发件人"}
                     </span>
+                    <Show when={props.searching && props.folderOf}>
+                      <span class="row-folder">
+                        {props.folderOf?.(message)}
+                      </span>
+                    </Show>
                     <time>{formatMailDate(message.date)}</time>
                   </div>
                   <div class="message-row-subject">
@@ -269,7 +371,7 @@ export function MessageList(props: {
             )}
           </For>
         </Show>
-        <Show when={props.hasMore}>
+        <Show when={props.hasMore && !props.searching}>
           <button
             type="button"
             class="load-more"

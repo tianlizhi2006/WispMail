@@ -3,7 +3,9 @@ import type {
   ComposeMessage,
   MessageDetail,
   MessagePage,
+  MessageSet,
   MessageSummary,
+  SearchHit,
 } from "../../lib/types.ts";
 
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -476,6 +478,36 @@ export function checkedMessages(
   return checked.size
     ? messages.filter((message) => checked.has(messageKey(message)))
     : [];
+}
+
+/**
+ * 从搜索结果中移除已移走/删除的邮件（只匹配同一文件夹、同一代 UID），
+ * 并在打开的邮件被移除时选出相邻的结果，规则与 removeFromList 相同。
+ */
+export function removeHits(
+  hits: SearchHit[],
+  set: Pick<MessageSet, "folder" | "uidValidity" | "uids">,
+  opened?: { folder: string; summary: MessageSummary },
+): { hits: SearchHit[]; next?: SearchHit } {
+  const removed = new Set(set.uids);
+  const gone = (hit: { folder: string; summary: MessageSummary }) =>
+    hit.folder === set.folder &&
+    hit.summary.uidValidity === set.uidValidity &&
+    removed.has(hit.summary.uid);
+  const remaining = hits.filter((hit) => !gone(hit));
+  if (!opened || !gone(opened)) return { hits: remaining };
+  const index = hits.findIndex(
+    (hit) =>
+      hit.folder === opened.folder &&
+      hit.summary.uid === opened.summary.uid &&
+      hit.summary.uidValidity === opened.summary.uidValidity,
+  );
+  const after = hits.slice(index + 1).find((hit) => !gone(hit));
+  const before = hits
+    .slice(0, Math.max(0, index))
+    .reverse()
+    .find((hit) => !gone(hit));
+  return { hits: remaining, next: after ?? before };
 }
 
 /** 可作为"移动到"目标的文件夹：可选择且不是当前文件夹。 */

@@ -21,6 +21,7 @@ import {
   parseAddresses,
   prepareSend,
   removeFromList,
+  removeHits,
   replyMessage,
   selectionRemainsInPage,
   splitAddresses,
@@ -259,6 +260,43 @@ test("live refresh replaces the newest page but keeps older pages the user loade
   assert.deepEqual(
     refreshFirstPage(current, complete).map((m) => m.uid),
     [10, 9],
+  );
+});
+
+test("removing a search result only affects the same folder and opens the neighbour", () => {
+  const hit = (folder, uid) => ({ folder, summary: row(uid) });
+  const hits = [
+    hit("INBOX", 5),
+    hit("Archive", 5),
+    hit("INBOX", 3),
+    hit("INBOX", 2),
+  ];
+  const result = removeHits(
+    hits,
+    { folder: "INBOX", uidValidity: 9, uids: [5] },
+    hits[0],
+  );
+  assert.deepEqual(
+    result.hits.map((h) => `${h.folder}:${h.summary.uid}`),
+    ["Archive:5", "INBOX:3", "INBOX:2"],
+    "the same UID in another folder is a different message",
+  );
+  assert.equal(result.next, hits[1]);
+  const last = removeHits(
+    hits,
+    { folder: "INBOX", uidValidity: 9, uids: [2] },
+    hits[3],
+  );
+  assert.equal(
+    last.next,
+    hits[2],
+    "the last result falls back to the previous one",
+  );
+  assert.equal(
+    removeHits(hits, { folder: "INBOX", uidValidity: 9, uids: [3] }, hits[1])
+      .next,
+    undefined,
+    "an unaffected opened message stays open",
   );
 });
 

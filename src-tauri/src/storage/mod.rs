@@ -8,7 +8,7 @@ use crate::account::Account;
 
 mod mail;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -26,6 +26,18 @@ pub enum StoreError {
     MailNotFound,
     #[error("{0}")]
     InvalidInput(String),
+}
+
+/// 写入搜索索引的各列（rowid、发件人、收件人与抄送、主题、正文）；正文最多索引 200 KB。
+fn search_columns(row: &str) -> String {
+    format!(
+        "{row}rowid,
+        coalesce(json_extract({row}summary, '$.from'), ''),
+        coalesce((SELECT group_concat(value, ', ') FROM json_each({row}summary, '$.to')), '')
+            || ' ' || coalesce((SELECT group_concat(value, ', ') FROM json_each({row}detail, '$.cc')), ''),
+        coalesce(json_extract({row}summary, '$.subject'), ''),
+        substr(coalesce(json_extract({row}detail, '$.textBody'), json_extract({row}summary, '$.snippet'), ''), 1, 200000)"
+    )
 }
 
 pub struct Store {
@@ -109,6 +121,43 @@ impl Store {
                 ALTER TABLE messages ADD COLUMN detail TEXT;
                 PRAGMA user_version = 3;",
             )?;
+            transaction.commit()?;
+        }
+        if version < 4 {
+            // v4：本地全文搜索。trigram 分词按连续三个字符建立索引，中文没有空格也能
+            // 按任意片段查找；两个字以内的词由查询改用 LIKE 匹配。
+            // 索引由触发器维护：缓存的任何写入、删除（含删除账户、文件夹的级联删除）
+            // 都会自动同步，正文以已下载并解析的纯文本为准，未下载时使用摘要。
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(&format!(
+                "CREATE VIRTUAL TABLE message_search USING fts5(
+                    sender, recipients, subject, body, tokenize = 'trigram'
+                );
+                CREATE TRIGGER message_search_insert AFTER INSERT ON messages BEGIN
+                    INSERT INTO message_search(rowid, sender, recipients, subject, body)
+                    VALUES ({new});
+                END;
+                CREATE TRIGGER message_search_delete AFTER DELETE ON messages BEGIN
+                    DELETE FROM message_search WHERE rowid = old.rowid;
+                END;
+                -- 只在可搜索的内容变化时重建索引；修改已读、星标不触发。
+                CREATE TRIGGER message_search_update AFTER UPDATE OF summary, detail ON messages
+                WHEN old.detail IS NOT new.detail
+                    OR json_extract(old.summary, '$.from') IS NOT json_extract(new.summary, '$.from')
+                    OR json_extract(old.summary, '$.to') IS NOT json_extract(new.summary, '$.to')
+                    OR json_extract(old.summary, '$.subject') IS NOT json_extract(new.summary, '$.subject')
+                    OR json_extract(old.summary, '$.snippet') IS NOT json_extract(new.summary, '$.snippet')
+                BEGIN
+                    DELETE FROM message_search WHERE rowid = old.rowid;
+                    INSERT INTO message_search(rowid, sender, recipients, subject, body)
+                    VALUES ({new});
+                END;
+                INSERT INTO message_search(rowid, sender, recipients, subject, body)
+                    SELECT {existing} FROM messages;
+                PRAGMA user_version = 4;",
+                new = search_columns("new."),
+                existing = search_columns(""),
+            ))?;
             transaction.commit()?;
         }
         Ok(Self { connection })

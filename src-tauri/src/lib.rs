@@ -14,6 +14,7 @@ pub mod mail;
 mod mail_commands;
 pub mod storage;
 pub mod sync;
+mod tray;
 
 use tauri::Manager;
 
@@ -32,6 +33,14 @@ fn discover_config(email: &str) -> Option<account::DiscoveredConfig> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 必须最先注册：再次启动 WispMail 时只唤出已在托盘中的窗口，不会运行第二份监视。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            tray::show_main(app);
+        }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![tray::MINIMIZED_ARG]),
+        ))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -50,8 +59,10 @@ pub fn run() {
             app.manage(inbox_watch::InboxWatchers::default());
             // 为已保存的账户开始监视收件箱，新邮件到达时实时同步并提醒。
             tauri::async_runtime::spawn(inbox_watch::start_all(app.handle().clone()));
+            tray::setup(app)?;
             Ok(())
         })
+        .on_window_event(tray::on_window_event)
         .invoke_handler(tauri::generate_handler![
             app_version,
             discover_config,
@@ -63,6 +74,7 @@ pub fn run() {
             mail_commands::refresh_folders,
             mail_commands::list_cached_messages,
             mail_commands::sync_folder,
+            mail_commands::search_messages,
             mail_commands::get_message,
             mail_commands::set_message_read,
             mail_commands::set_message_flags,

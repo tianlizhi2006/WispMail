@@ -5,11 +5,33 @@ use rusqlite::{OptionalExtension, params};
 use super::{Store, StoreError};
 use crate::mail::{
     ComposeMessage, MAX_RAW_MESSAGE_BYTES, MESSAGE_PAGE_SIZE, MailFolder, MessageDetail,
-    MessagePage, MessageSummary, validate_compose,
+    MessagePage, MessageSummary, SearchHit, validate_compose,
 };
 
 /// 已解析正文 JSON 的缓存上限；超过时只保存原文，打开时重新解析。
 const MAX_DETAIL_CACHE_BYTES: usize = 4 * 1024 * 1024;
+/// 一次搜索最多返回的邮件数与关键词数。
+pub const SEARCH_LIMIT: usize = 200;
+const MAX_SEARCH_TERMS: usize = 8;
+
+/// 拆分搜索词：按空白分隔、去重（不区分大小写），每个词最多 100 个字符。
+fn search_terms(query: &str) -> Vec<String> {
+    let mut terms: Vec<String> = Vec::new();
+    for raw in query.split_whitespace() {
+        let term: String = raw.chars().filter(|c| !c.is_control()).take(100).collect();
+        if !term.is_empty()
+            && !terms
+                .iter()
+                .any(|existing| existing.to_lowercase() == term.to_lowercase())
+        {
+            terms.push(term);
+        }
+        if terms.len() == MAX_SEARCH_TERMS {
+            break;
+        }
+    }
+    terms
+}
 
 impl Store {
     pub fn list_folders(&self, account_id: &str) -> Result<Vec<MailFolder>, StoreError> {
@@ -428,6 +450,65 @@ impl Store {
 
     /// 邮件被移出或删除后从本地缓存移除。目标文件夹的新副本会在下次同步时出现
     /// （服务器分配新 UID），这里不猜测新 UID。
+    /// 在本地缓存中搜索某账户的邮件（所有文件夹），所有关键词都须出现在发件人、
+    /// 收件人、主题或正文中。三个字符及以上的词走 trigram 索引；更短的词（如两个汉字）
+    /// 用 LIKE 在索引内容中匹配。结果按日期从新到旧排列。
+    pub fn search_messages(
+        &self,
+        account_id: &str,
+        query: &str,
+    ) -> Result<Vec<SearchHit>, StoreError> {
+        let terms = search_terms(query);
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (long, short): (Vec<&String>, Vec<&String>) =
+            terms.iter().partition(|term| term.chars().count() >= 3);
+        let mut sql = String::from(
+            "SELECT m.folder, m.summary FROM message_search
+             JOIN messages m ON m.rowid = message_search.rowid
+             WHERE m.account_id = ?1",
+        );
+        let mut values = vec![account_id.to_string()];
+        if !long.is_empty() {
+            // 每个词作为带引号的短语，内部的双引号按 FTS5 规则重复转义；多个短语之间为 AND。
+            values.push(
+                long.iter()
+                    .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
+            sql.push_str(&format!(" AND message_search MATCH ?{}", values.len()));
+        }
+        for term in short {
+            let escaped = term
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            values.push(format!("%{escaped}%"));
+            sql.push_str(&format!(
+                " AND (message_search.sender || ' ' || message_search.recipients || ' ' \
+                 || message_search.subject || ' ' || message_search.body) LIKE ?{} ESCAPE '\\'",
+                values.len()
+            ));
+        }
+        sql.push_str(&format!(
+            " ORDER BY json_extract(m.summary, '$.date') DESC, m.uid DESC LIMIT {SEARCH_LIMIT}"
+        ));
+        let mut statement = self.connection.prepare(&sql)?;
+        let rows = statement.query_map(rusqlite::params_from_iter(values.iter()), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.map(|row| {
+            let (folder, summary) = row?;
+            Ok(SearchHit {
+                folder,
+                summary: serde_json::from_str(&summary)?,
+            })
+        })
+        .collect()
+    }
+
     pub fn remove_messages(
         &self,
         account_id: &str,
@@ -616,7 +697,7 @@ mod tests {
                     .connection
                     .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
                     .unwrap(),
-                3
+                4
             );
             store
                 .cache_folder_page("a", "INBOX", 1, &[summary(1, 1)], None)
@@ -853,6 +934,109 @@ mod tests {
                 .as_deref(),
             Some(RAW)
         );
+    }
+
+    fn search(store: &Store, account: &str, query: &str) -> Vec<u32> {
+        store
+            .search_messages(account, query)
+            .unwrap()
+            .iter()
+            .map(|hit| hit.summary.uid)
+            .collect()
+    }
+
+    #[test]
+    fn upgrading_to_v4_indexes_mail_that_was_already_cached() {
+        let directory =
+            std::env::temp_dir().join(format!("wispmail-search-test-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("wispmail.sqlite3");
+        {
+            let store = Store::open(&path).unwrap();
+            store.insert_account(&account("a")).unwrap();
+            store
+                .cache_folder_page("a", "INBOX", 1, &[summary(1, 1)], Some(&[1]))
+                .unwrap();
+            store.cache_message_raw("a", "INBOX", 1, 1, RAW).unwrap();
+            // 还原成 v3 数据库：缓存里已有邮件，但还没有搜索索引。
+            store.execute_test_batch(
+                "DROP TRIGGER message_search_insert; DROP TRIGGER message_search_delete;
+                 DROP TRIGGER message_search_update; DROP TABLE message_search;
+                 PRAGMA user_version = 3;",
+            );
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(search(&store, "a", "Offline body"), vec![1]);
+        assert_eq!(search(&store, "a", "cached mail"), vec![1]);
+        drop(store);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn full_text_search_finds_chinese_fragments_bodies_and_follows_cache_changes() {
+        let store = store();
+        let report = "From: 张三 <zhang@example.com>\r\nTo: a@example.com\r\nSubject: 项目周报 Weekly Report\r\nDate: Mon, 2 Nov 2026 08:00:00 +0000\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n本周完成了服务器迁移，下周开始压力测试。";
+        let meeting = "From: Li Si <li@example.com>\r\nTo: b@example.com\r\nSubject: 会议通知\r\nDate: Tue, 3 Nov 2026 08:00:00 +0000\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n明天下午三点开会。";
+        let parsed = |raw: &str, uid| {
+            parse_summary(raw.as_bytes(), uid, 1, true, false, raw.len() as u32).unwrap()
+        };
+        store
+            .cache_folder_page(
+                "a",
+                "INBOX",
+                1,
+                &[parsed(report, 1), parsed(meeting, 2)],
+                Some(&[1, 2]),
+            )
+            .unwrap();
+        assert_eq!(
+            search(&store, "a", "周报"),
+            vec![1],
+            "two-character Chinese word"
+        );
+        assert_eq!(search(&store, "a", "WEEKLY"), vec![1], "case-insensitive");
+        assert_eq!(search(&store, "a", "li@example"), vec![2], "sender address");
+        assert_eq!(search(&store, "a", "b@example.com"), vec![2], "recipient");
+        assert_eq!(search(&store, "a", "example"), vec![2, 1], "newest first");
+        assert!(
+            search(&store, "a", "压力测试").is_empty(),
+            "body not downloaded yet"
+        );
+        store
+            .cache_message_raw("a", "INBOX", 1, 1, report.as_bytes())
+            .unwrap();
+        assert_eq!(search(&store, "a", "压力测试"), vec![1], "downloaded body");
+        assert_eq!(
+            search(&store, "a", "张三 迁移"),
+            vec![1],
+            "all terms must match"
+        );
+        assert!(search(&store, "a", "张三 会议").is_empty());
+        assert!(
+            search(&store, "b", "周报").is_empty(),
+            "other accounts are isolated"
+        );
+        for odd in ["100%", "\"", "a_b", "\\", "   ", "NEAR(", "*"] {
+            assert!(store.search_messages("a", odd).is_ok(), "query {odd:?}");
+        }
+        store
+            .update_summaries("a", "INBOX", 1, &[1], |summary| summary.flagged = true)
+            .unwrap();
+        assert_eq!(
+            search(&store, "a", "压力测试"),
+            vec![1],
+            "flag change keeps the index"
+        );
+        store.remove_messages("a", "INBOX", 1, &[1]).unwrap();
+        assert!(
+            search(&store, "a", "周报").is_empty(),
+            "removed mail leaves the index"
+        );
+        store.delete_account("a").unwrap();
+        let indexed: i64 = store
+            .connection
+            .query_row("SELECT count(*) FROM message_search", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(indexed, 0, "cascade deletes clean the index");
     }
 
     #[test]

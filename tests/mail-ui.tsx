@@ -239,6 +239,19 @@ async function mockInvoke(command: string, args: Args = {}): Promise<unknown> {
         return { target, needsPermanentDelete: false };
       }
       case "save_attachment": return null; // Simulate cancellation, never write a local file.
+      case "search_messages": {
+        // Substring search over the cached summaries and downloaded bodies, like the backend index.
+        const terms = String(args.query ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+        const hits: { folder: string; summary: MessageSummary }[] = [];
+        for (const name of ["INBOX", "Sent"]) {
+          for (const summary of cache.get(boxKey(accountId, name))?.messages ?? []) {
+            const body = bodies.get(bodyKey(accountId, name, summary.uid, summary.uidValidity))?.textBody ?? summary.snippet;
+            const text = [summary.from, summary.to.join(", "), summary.subject, body].join(" ").toLowerCase();
+            if (terms.every((term) => text.includes(term))) hits.push({ folder: name, summary: clone(summary) });
+          }
+        }
+        return hits.sort((a, b) => b.summary.date.localeCompare(a.summary.date));
+      }
       case "estimate_forward_size": return 48_000 + uid * 1000;
       case "forward_attachments": {
         const detail = bodies.get(bodyKey(accountId, folder, uid, validity)) ?? remoteDetail(accountId, folder, uid, validity);

@@ -12,7 +12,9 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "WispMail",
+        "visible": false,
         "width": 1100,
         "height": 720,
         "minWidth": 820,

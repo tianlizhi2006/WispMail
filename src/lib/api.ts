@@ -17,6 +17,7 @@ import type {
   MessageFlag,
   OrganizeAction,
   OrganizeResult,
+  SearchHit,
   SendResult,
 } from "./types";
 
@@ -126,6 +127,14 @@ export function syncFolder(
     beforeUid,
     expectedUidValidity,
   });
+}
+
+/** 在本地缓存中全文搜索当前账户的所有文件夹（最多 200 条，按日期从新到旧）。 */
+export function searchMessages(
+  accountId: string,
+  query: string,
+): Promise<SearchHit[]> {
+  return command("search_messages", { accountId, query });
 }
 
 export function getMessage(ref: MessageRef): Promise<MessageDetail> {

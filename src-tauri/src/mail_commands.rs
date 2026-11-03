@@ -10,7 +10,7 @@ use crate::{
     commands::{AccountsState, ConnectionPermit, with_accounts},
     mail::{
         self, ComposeMessage, ForwardAttachments, MailFolder, MessageDetail, MessagePage,
-        MessageSummary, SendResult,
+        MessageSummary, SearchHit, SendResult,
     },
     storage::StoreError,
     sync,
@@ -78,6 +78,26 @@ pub async fn list_cached_messages(
         service
             .store()
             .list_messages(&account_id, &folder, before_uid)
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// 在本地缓存中全文搜索当前账户的所有文件夹，不连接服务器。
+#[tauri::command]
+pub async fn search_messages(
+    account_id: String,
+    query: String,
+    state: tauri::State<'_, AccountsState>,
+) -> Result<Vec<SearchHit>, String> {
+    if query.len() > 1000 {
+        return Err("搜索内容过长。".into());
+    }
+    with_accounts(&state, move |service| {
+        service.get_account(&account_id)?;
+        service
+            .store()
+            .search_messages(&account_id, &query)
             .map_err(|e| e.to_string())
     })
     .await

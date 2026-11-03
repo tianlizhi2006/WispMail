@@ -19,7 +19,8 @@ type IconName =
   | "inbox"
   | "star"
   | "archive"
-  | "folder";
+  | "folder"
+  | "search";
 const paths: Record<IconName, () => JSX.Element> = {
   star: () => (
     <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9L12 3Z" />
@@ -28,6 +29,12 @@ const paths: Record<IconName, () => JSX.Element> = {
     <>
       <rect x="3" y="4" width="18" height="5" rx="1" />
       <path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4" />
+    </>
+  ),
+  search: () => (
+    <>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
     </>
   ),
   folder: () => (

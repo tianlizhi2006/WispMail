@@ -1,4 +1,11 @@
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  For,
+  onCleanup,
+  onMount,
+  Show,
+} from "solid-js";
 import {
   clearDraft,
   errorMessage,
@@ -11,6 +18,7 @@ import {
   organizeMessages,
   refreshFolders,
   saveAttachment,
+  searchMessages,
   setMessageFlags,
   setMessageRead,
   syncFolder,
@@ -26,6 +34,7 @@ import type {
   MessageSet,
   MessageSummary,
   OrganizeAction,
+  SearchHit,
   SendResult,
 } from "../../lib/types";
 import { Icon } from "../../ui/Icon";
@@ -45,6 +54,7 @@ import {
   moveTargets,
   refreshFirstPage,
   removeFromList,
+  removeHits,
   replyMessage,
   selectionRemainsInPage,
   toggleChecked,
@@ -81,6 +91,19 @@ export function MailWorkspace(props: {
   const [pendingDelete, setPendingDelete] = createSignal<MessageSet>();
   const [checked, setChecked] = createSignal<ReadonlySet<string>>(new Set());
   const [forwardBusy, setForwardBusy] = createSignal(false);
+  /** 打开的邮件所在的文件夹；打开搜索结果时可能不是左侧选中的文件夹。 */
+  const [readerFolder, setReaderFolder] = createSignal<string>();
+  const [searchQuery, setSearchQuery] = createSignal("");
+  /** 非 null 时列表处于搜索模式。 */
+  const [searchHits, setSearchHits] = createSignal<SearchHit[] | null>(null);
+  const [searchLoading, setSearchLoading] = createSignal(false);
+  const [searchError, setSearchError] = createSignal("");
+  const searchGuard = createRequestGuard();
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  const hitFolders = createMemo(
+    () => new Map(searchHits()?.map((hit) => [hit.summary, hit.folder]) ?? []),
+  );
+  const searching = () => searchHits() !== null || searchLoading();
   const [notice, setNotice] = createSignal("");
   const [draftLoading, setDraftLoading] = createSignal(false);
   const [composer, setComposer] = createSignal<{
@@ -121,6 +144,8 @@ export function MailWorkspace(props: {
   });
   onCleanup(() => {
     alive = false;
+    if (searchTimer !== undefined) clearTimeout(searchTimer);
+    searchGuard.invalidate();
     listGuard.invalidate();
     readerGuard.invalidate();
     attachmentGuard.invalidate();
@@ -183,12 +208,44 @@ export function MailWorkspace(props: {
     }
   }
 
+  /** 输入停顿 250 毫秒后搜索；清空搜索框回到文件夹列表。 */
+  function changeSearch(value: string) {
+    setSearchQuery(value);
+    if (searchTimer !== undefined) clearTimeout(searchTimer);
+    searchGuard.invalidate();
+    setSearchError("");
+    if (!value.trim()) {
+      setSearchHits(null);
+      setSearchLoading(false);
+      return;
+    }
+    setSearchLoading(true);
+    searchTimer = setTimeout(() => void runSearch(value), 250);
+  }
+
+  async function runSearch(value: string) {
+    const token = searchGuard.next();
+    try {
+      const hits = await searchMessages(accountId, value);
+      if (alive && searchGuard.valid(token)) setSearchHits(hits);
+    } catch (error) {
+      if (alive && searchGuard.valid(token)) {
+        setSearchHits([]);
+        setSearchError(`搜索失败：${errorMessage(error)}`);
+      }
+    } finally {
+      if (alive && searchGuard.valid(token)) setSearchLoading(false);
+    }
+  }
+
   function selectFolder(next: MailFolder) {
+    if (searching()) changeSearch("");
     if (!next.selectable || next.name === folder()?.name) return;
     readerGuard.invalidate();
     attachmentGuard.invalidate();
     setSelected(undefined);
     setDetail(undefined);
+    setReaderFolder(undefined);
     setReaderError("");
     setReaderLoading(false);
     setReadBusy(false);
@@ -320,13 +377,17 @@ export function MailWorkspace(props: {
   function refFor(message: MessageSummary): MessageRef {
     return {
       accountId,
-      folder: folder()!.name,
+      folder: readerFolder() ?? folder()!.name,
       uid: message.uid,
       uidValidity: message.uidValidity,
     };
   }
-  /** 把服务器已确认的摘要变化应用到列表、阅读区和内存缓存。 */
+  /**
+   * 把服务器已确认的摘要变化应用到列表、搜索结果、阅读区和内存缓存。
+   * 只修改同一文件夹中的邮件：不同文件夹的 UID 可能相同。
+   */
   function applySummary(
+    folderName: string,
     uids: number[],
     uidValidity: number,
     patch: Partial<Pick<MessageSummary, "unread" | "flagged">>,
@@ -336,17 +397,27 @@ export function MailWorkspace(props: {
       targets.has(message.uid) && message.uidValidity === uidValidity
         ? { ...message, ...patch }
         : message;
-    setMessages((current) => current.map(transform));
-    setSelected((current) => (current ? transform(current) : current));
-    setDetail((current) =>
-      current ? { ...current, summary: transform(current.summary) } : current,
+    if (folder()?.name === folderName)
+      setMessages((current) => current.map(transform));
+    setSearchHits((current) =>
+      current
+        ? current.map((hit) =>
+            hit.folder === folderName
+              ? { ...hit, summary: transform(hit.summary) }
+              : hit,
+          )
+        : current,
     );
-    const target = folder();
-    if (!target) return;
+    if (readerFolder() === folderName) {
+      setSelected((current) => (current ? transform(current) : current));
+      setDetail((current) =>
+        current ? { ...current, summary: transform(current.summary) } : current,
+      );
+    }
     for (const uid of uids) {
       const key = detailKey({
         accountId,
-        folder: target.name,
+        folder: folderName,
         uid,
         uidValidity,
       });
@@ -355,24 +426,24 @@ export function MailWorkspace(props: {
         detailCache.set(key, { ...cached, summary: transform(cached.summary) });
     }
   }
-  const applyRead = (uid: number, uidValidity: number, read: boolean) =>
-    applySummary([uid], uidValidity, { unread: !read });
+  const applyRead = (ref: MessageRef, read: boolean) =>
+    applySummary(ref.folder, [ref.uid], ref.uidValidity, { unread: !read });
 
   async function toggleFlag() {
     const loaded = detail();
-    const target = folder();
+    const target = readerFolder();
     if (!loaded || !target || readBusy() || organizeBusy()) return;
     const { uid, uidValidity, flagged } = loaded.summary;
     const token = readerGuard.next();
     setReadBusy(true);
     try {
       await setMessageFlags(
-        { accountId, folder: target.name, uidValidity, uids: [uid] },
+        { accountId, folder: target, uidValidity, uids: [uid] },
         "flagged",
         !flagged,
       );
       if (alive && readerGuard.valid(token))
-        applySummary([uid], uidValidity, { flagged: !flagged });
+        applySummary(target, [uid], uidValidity, { flagged: !flagged });
     } catch (error) {
       if (alive && readerGuard.valid(token))
         setNotice(`更新星标失败：${errorMessage(error)}`);
@@ -381,41 +452,59 @@ export function MailWorkspace(props: {
     }
   }
 
-  /** 邮件已离开当前文件夹：从列表移除，并自动打开相邻的邮件。 */
+  /** 邮件已离开所在文件夹：从列表和搜索结果移除，并自动打开相邻的邮件。 */
   function afterRemoved(set: MessageSet) {
     const { uids, uidValidity } = set;
     for (const uid of uids)
       detailCache.delete(
         detailKey({ accountId, folder: set.folder, uid, uidValidity }),
       );
-    // 请求期间用户已切换文件夹：列表属于另一个文件夹，不能按 UID 删除。
-    if (folder()?.name !== set.folder) return;
-    setChecked((current) => {
-      const next = new Set(current);
-      for (const uid of uids) next.delete(messageKey({ uid, uidValidity }));
-      return next;
-    });
-    const { messages: remaining, next } = removeFromList(
-      messages(),
-      uidValidity,
-      uids,
-      selected(),
-    );
-    setMessages(remaining);
-    const current = selected();
-    if (
-      current &&
-      current.uidValidity === uidValidity &&
-      uids.includes(current.uid)
-    ) {
-      if (next) void openMessage(next);
-      else {
-        readerGuard.invalidate();
-        attachmentGuard.invalidate();
-        setSelected(undefined);
-        setDetail(undefined);
-        setReaderLoading(false);
-      }
+    const opened = selected();
+    const openedFolder = readerFolder();
+    const openedRemoved =
+      !!opened &&
+      openedFolder === set.folder &&
+      opened.uidValidity === uidValidity &&
+      uids.includes(opened.uid);
+    let next: { message: MessageSummary; folder: string } | undefined;
+    const hits = searchHits();
+    if (hits) {
+      const result = removeHits(
+        hits,
+        set,
+        openedRemoved ? { folder: openedFolder!, summary: opened! } : undefined,
+      );
+      setSearchHits(result.hits);
+      if (result.next)
+        next = { message: result.next.summary, folder: result.next.folder };
+    }
+    // 请求期间用户可能已切换文件夹：列表属于另一个文件夹时不能按 UID 删除。
+    if (folder()?.name === set.folder) {
+      setChecked((current) => {
+        const remaining = new Set(current);
+        for (const uid of uids)
+          remaining.delete(messageKey({ uid, uidValidity }));
+        return remaining;
+      });
+      const result = removeFromList(
+        messages(),
+        uidValidity,
+        uids,
+        openedRemoved && !hits ? opened : undefined,
+      );
+      setMessages(result.messages);
+      if (!hits && result.next)
+        next = { message: result.next, folder: set.folder };
+    }
+    if (!openedRemoved) return;
+    if (next) void openMessage(next.message, next.folder);
+    else {
+      readerGuard.invalidate();
+      attachmentGuard.invalidate();
+      setSelected(undefined);
+      setDetail(undefined);
+      setReaderFolder(undefined);
+      setReaderLoading(false);
     }
   }
 
@@ -466,11 +555,11 @@ export function MailWorkspace(props: {
 
   function organize(action: OrganizeAction) {
     const loaded = detail();
-    const target = folder();
+    const target = readerFolder();
     if (!loaded || !target) return;
     const { uid, uidValidity } = loaded.summary;
     void runOrganize(
-      { accountId, folder: target.name, uidValidity, uids: [uid] },
+      { accountId, folder: target, uidValidity, uids: [uid] },
       action,
     );
   }
@@ -516,6 +605,7 @@ export function MailWorkspace(props: {
       await setMessageFlags(set, flag, value);
       if (alive)
         applySummary(
+          set.folder,
           set.uids,
           set.uidValidity,
           flag === "seen" ? { unread: !value } : { flagged: value },
@@ -554,10 +644,12 @@ export function MailWorkspace(props: {
     }
   }
 
-  async function openMessage(message: MessageSummary) {
-    if (!folder()) return;
+  async function openMessage(message: MessageSummary, inFolder?: string) {
+    const folderName = inFolder ?? folder()?.name;
+    if (!folderName) return;
     const token = readerGuard.next();
     attachmentGuard.invalidate();
+    setReaderFolder(folderName);
     const ref = refFor(message);
     const key = detailKey(ref);
     setSelected(message);
@@ -586,8 +678,7 @@ export function MailWorkspace(props: {
         setReadBusy(true);
         try {
           await setMessageRead(ref, true);
-          if (alive && readerGuard.valid(token))
-            applyRead(ref.uid, ref.uidValidity, true);
+          if (alive && readerGuard.valid(token)) applyRead(ref, true);
         } catch {
           if (alive && readerGuard.valid(token))
             setNotice("邮件已打开；已读状态暂未同步，可恢复连接后重试。");
@@ -612,8 +703,7 @@ export function MailWorkspace(props: {
     setReadBusy(true);
     try {
       await setMessageRead(ref, read);
-      if (alive && readerGuard.valid(token))
-        applyRead(ref.uid, ref.uidValidity, read);
+      if (alive && readerGuard.valid(token)) applyRead(ref, read);
     } catch (error) {
       if (alive && readerGuard.valid(token))
         setNotice(`更新已读状态失败：${errorMessage(error)}`);
@@ -669,7 +759,7 @@ export function MailWorkspace(props: {
 
   async function forward() {
     const loaded = detail();
-    const target = folder();
+    const target = readerFolder();
     if (!loaded || !target || forwardBusy() || draftLoading() || composer())
       return;
     setForwardBusy(true);
@@ -688,7 +778,7 @@ export function MailWorkspace(props: {
             `以下附件超出发送限制（合计 10 MB、最多 20 个）或已损坏，未随转发附上：${result.skipped.join("、")}`,
           );
       }
-      await compose(forwardMessage(loaded, target.name, attachments));
+      await compose(forwardMessage(loaded, target, attachments));
     } catch (error) {
       if (alive) setNotice(`无法转发：${errorMessage(error)}`);
     } finally {
@@ -789,16 +879,28 @@ export function MailWorkspace(props: {
       </aside>
       <MessageList
         title={folder()?.displayName || folder()?.name || ""}
-        messages={messages()}
+        messages={
+          searchHits()?.map((hit) => hit.summary) ??
+          (searching() ? [] : messages())
+        }
         selected={selected()}
-        loading={listLoading()}
+        loading={searching() ? searchLoading() : listLoading()}
         loadingMore={moreLoading()}
         hasMore={hasMore()}
-        error={listError()}
+        error={searching() ? searchError() : listError()}
+        searchQuery={searchQuery()}
+        onSearchQuery={changeSearch}
+        searching={searching()}
+        folderOf={(message) => folderLabel(hitFolders().get(message) ?? null)}
         checked={checked()}
         batchBusy={organizeBusy()}
         moveTargets={moveTargets(folders(), folder()?.name)}
-        onSelect={(message) => void openMessage(message)}
+        onSelect={(message) =>
+          void openMessage(
+            message,
+            searching() ? hitFolders().get(message) : undefined,
+          )
+        }
         onToggleCheck={toggleCheck}
         onCheckAll={checkAll}
         onBatchFlag={(flag, value) => void batchFlag(flag, value)}
@@ -844,7 +946,7 @@ export function MailWorkspace(props: {
                   class="button button--secondary"
                   onClick={() => {
                     const target = selected();
-                    if (target) void openMessage(target);
+                    if (target) void openMessage(target, readerFolder());
                   }}
                 >
                   重试
@@ -871,7 +973,7 @@ export function MailWorkspace(props: {
                   attachmentBusy={attachmentBusy()}
                   organizeBusy={organizeBusy()}
                   forwardBusy={forwardBusy() || draftLoading()}
-                  moveTargets={moveTargets(folders(), folder()?.name)}
+                  moveTargets={moveTargets(folders(), readerFolder())}
                   onReply={(all) =>
                     void compose(
                       replyMessage(loaded(), props.account.email, all),
@@ -989,7 +1091,8 @@ export function MailWorkspace(props: {
                 : "永久删除这封邮件？"}
             </h2>
             <p class="muted">
-              {folder()?.kind === "trash"
+              {folders().find((item) => item.name === pendingDelete()?.folder)
+                ?.kind === "trash"
                 ? "邮件已在废纸篓中，删除后将从服务器上永久移除，无法恢复。"
                 : "服务器上没有废纸篓文件夹，删除后将从服务器上永久移除，无法恢复。"}
             </p>

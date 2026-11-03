@@ -136,6 +136,55 @@
   font-size: 10px;
   color: var(--text-muted);
 }
+.list-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 14px;
+  padding: 0 4px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-muted);
+}
+.list-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.list-search > svg {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+}
+.list-search input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+.list-search input::-webkit-search-cancel-button {
+  display: none;
+}
+.list-search-clear svg {
+  width: 14px;
+  height: 14px;
+}
+.row-folder {
+  flex-shrink: 0;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-muted);
+  color: var(--text-muted);
+  font-size: 9px;
+}
 .message-list-scroll {
   min-height: 0;
   flex: 1;

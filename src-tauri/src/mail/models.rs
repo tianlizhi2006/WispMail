@@ -113,6 +113,14 @@ pub struct ComposeMessage {
     pub forward: Option<ForwardSource>,
 }
 
+/// 搜索结果：邮件摘要及其所在文件夹。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHit {
+    pub folder: String,
+    pub summary: MessageSummary,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessagePage {
