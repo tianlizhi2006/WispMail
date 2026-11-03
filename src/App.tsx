@@ -266,10 +266,27 @@ function App() {
                     连接自建 / 域名邮箱
                   </button>
                   <div class="provider-list">
-                    <span>QQ 邮箱</span>
-                    <span>网易邮箱</span>
-                    <span>iCloud</span>
-                    <span>自建 / 域名邮箱</span>
+                    <button
+                      type="button"
+                      onClick={() => setEditor({ mode: "authcode" })}
+                    >
+                      QQ 邮箱
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditor({ mode: "authcode" })}
+                    >
+                      网易邮箱
+                    </button>
+                    <button type="button" onClick={() => setEditor({})}>
+                      iCloud
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditor({ mode: "manual" })}
+                    >
+                      自建 / 域名邮箱
+                    </button>
                   </div>
                 </section>
               }

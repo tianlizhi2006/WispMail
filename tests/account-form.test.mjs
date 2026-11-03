@@ -2,12 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   accountInputForSubmission,
+  authCodeSubmission,
   createAccountDraft,
   createDiscoveryGuard,
+  initialModeFor,
   requiresOutgoingPassword,
   setPasswordSharing,
   shouldDiscoverConfig,
 } from "../src/features/accounts/accountForm.ts";
+import {
+  authCodeProviderFor,
+  emailForProvider,
+  normalizeAuthCode,
+  AUTH_CODE_PROVIDERS,
+} from "../src/features/accounts/authCodeProviders.ts";
 
 const storedAccount = {
   id: "existing",
@@ -137,4 +145,71 @@ test("manual mode never starts guessed discovery, even when the email changes or
     ),
     true,
   );
+});
+
+test("QQ and NetEase addresses are recognised as authorization-code mailboxes", () => {
+  assert.equal(authCodeProviderFor("Someone@QQ.com ")?.id, "qq");
+  assert.equal(authCodeProviderFor("a@foxmail.com")?.id, "qq");
+  assert.equal(authCodeProviderFor("a@163.com")?.id, "163");
+  assert.equal(authCodeProviderFor("a@126.com")?.id, "126");
+  assert.equal(authCodeProviderFor("a@yeah.net")?.id, "yeah");
+  assert.equal(authCodeProviderFor("a@example.com"), undefined);
+  assert.equal(authCodeProviderFor("no-at-sign"), undefined);
+  const netease = AUTH_CODE_PROVIDERS.find((provider) => provider.id === "163");
+  assert.equal(emailForProvider("zhang@qq.com", netease), "zhang@163.com");
+  assert.equal(emailForProvider("zhang", netease), "zhang@163.com");
+  assert.equal(emailForProvider("", netease), "", "nothing typed yet");
+});
+
+test("authorization codes lose pasted whitespace and always use one shared code with the email login", () => {
+  assert.equal(
+    normalizeAuthCode(" abcd efgh\nijkl\tmnop "),
+    "abcdefghijklmnop",
+  );
+  const draft = {
+    ...createAccountDraft(),
+    email: " me@qq.com ",
+    incoming: { host: "imap.qq.com", port: 993, encryption: "tls" },
+    outgoing: { host: "smtp.qq.com", port: 465, encryption: "tls" },
+    incomingUsername: "leftover",
+    outgoingUsername: "leftover",
+    useSamePassword: false,
+    password: "abcd efgh ijkl mnop",
+    outgoingPassword: "should-not-be-sent",
+  };
+  const input = authCodeSubmission(draft);
+  assert.equal(input.email, "me@qq.com");
+  assert.equal(input.password, "abcdefghijklmnop");
+  assert.equal(input.useSamePassword, true);
+  assert.equal(input.outgoingPassword, null);
+  assert.equal(input.incomingUsername, "");
+  assert.equal(input.outgoingUsername, "");
+  assert.equal(
+    authCodeSubmission({ ...draft, password: "" }).password,
+    "",
+    "editing keeps the stored code",
+  );
+});
+
+test("authorization-code mode discovers servers and existing auth-code accounts reopen in it", () => {
+  assert.equal(shouldDiscoverConfig("authcode", "me@163.com", ""), true);
+  assert.equal(
+    shouldDiscoverConfig("authcode", "me@163.com", "me@163.com"),
+    false,
+  );
+  const qq = {
+    ...storedAccount,
+    email: "me@qq.com",
+    incomingUsername: "",
+    outgoingUsername: "",
+    useSamePassword: true,
+  };
+  assert.equal(initialModeFor(qq), "authcode");
+  assert.equal(
+    initialModeFor({ ...qq, incomingUsername: "custom" }),
+    "manual",
+    "custom logins keep the full form",
+  );
+  assert.equal(initialModeFor({ ...qq, email: "me@example.com" }), "manual");
+  assert.equal(initialModeFor(undefined), undefined);
 });

@@ -1,8 +1,16 @@
-import { createSignal, onCleanup, onMount, Show } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  For,
+  onCleanup,
+  onMount,
+  Show,
+} from "solid-js";
 import {
   desktopAvailable,
   discoverConfig,
   errorMessage,
+  openEmailLink,
   saveAccount,
   testAccountConnection,
 } from "../../lib/api";
@@ -16,13 +24,21 @@ import type {
 import { Icon } from "../../ui/Icon";
 import {
   accountInputForSubmission,
+  authCodeSubmission,
   createAccountDraft,
   createDiscoveryGuard,
   requiresOutgoingPassword,
+  initialModeFor,
   setPasswordSharing,
   shouldDiscoverConfig,
   type ConfigurationMode,
 } from "./accountForm";
+import {
+  AUTH_CODE_PROVIDERS,
+  authCodeProviderFor,
+  emailForProvider,
+  type AuthCodeProvider,
+} from "./authCodeProviders";
 
 export function AccountEditor(props: {
   account?: Account;
@@ -35,8 +51,12 @@ export function AccountEditor(props: {
     createAccountDraft(initial),
   );
   const [mode, setMode] = createSignal<ConfigurationMode>(
-    initial ? "manual" : (props.initialMode ?? "automatic"),
+    initialModeFor(initial) ?? props.initialMode ?? "automatic",
   );
+  /** 授权码邮箱：按地址域名识别；尚未输入地址时使用点选的服务商。 */
+  const [chosenProvider, setChosenProvider] = createSignal<AuthCodeProvider>();
+  const detectedProvider = createMemo(() => authCodeProviderFor(draft().email));
+  const guide = () => detectedProvider() ?? chosenProvider();
   const [discovered, setDiscovered] = createSignal<DiscoveredConfig>();
   const [lastDiscoveredEmail, setLastDiscoveredEmail] = createSignal(
     initial?.email ?? "",
@@ -87,6 +107,18 @@ export function AccountEditor(props: {
     if (next === mode()) return;
     discovery.invalidate();
     setMode(next);
+    if (next === "authcode") {
+      // 授权码邮箱用邮箱地址登录，收发信共用同一个授权码。
+      if (outgoingPasswordInput) outgoingPasswordInput.value = "";
+      setDraft((current) => ({
+        ...current,
+        incomingUsername: "",
+        outgoingUsername: "",
+        useSamePassword: true,
+        outgoingPassword: "",
+      }));
+      queueMicrotask(() => void discover());
+    }
     setDiscovered(undefined);
     setLastDiscoveredEmail("");
     setResult(undefined);
@@ -143,8 +175,7 @@ export function AccountEditor(props: {
     setResult(undefined);
     try {
       const config = await discoverConfig(email);
-      if (!alive || !discovery.canApply(token) || mode() !== "automatic")
-        return;
+      if (!alive || !discovery.canApply(token) || mode() === "manual") return;
       if (!config) {
         setError("请输入有效的邮箱地址。");
         return;
@@ -158,7 +189,7 @@ export function AccountEditor(props: {
         outgoing: config.outgoing,
       }));
     } catch (error) {
-      if (alive && discovery.canApply(token) && mode() === "automatic")
+      if (alive && discovery.canApply(token) && mode() !== "manual")
         setError(errorMessage(error));
     } finally {
       if (alive && discovery.isLatest(token) && busy() === "discover")
@@ -166,9 +197,35 @@ export function AccountEditor(props: {
     }
   }
 
+  function chooseProvider(provider: AuthCodeProvider) {
+    setChosenProvider(provider);
+    const email = emailForProvider(draft().email, provider);
+    if (email && email !== draft().email) {
+      update({ email });
+      queueMicrotask(() => void discover());
+    } else emailInput?.focus();
+  }
+
   async function submit(action: "test" | "save") {
-    if (busy() || !form.reportValidity()) return;
-    const input = accountInputForSubmission(draft());
+    if (busy()) return;
+    if (mode() === "authcode") {
+      const email = draft().email.trim();
+      if (email && !authCodeProviderFor(email)) {
+        setError(
+          "这不是 QQ 邮箱或网易邮箱的地址。其他邮箱请选择上方的「常见邮箱」或「自建 / 域名邮箱」。",
+        );
+        return;
+      }
+      // 服务器配置不在表单中显示：提交前确保已按当前地址自动填写。
+      if (email && (lastDiscoveredEmail() !== email || !draft().incoming.host))
+        await discover(true);
+    }
+    if (!form.reportValidity()) return;
+    if (mode() === "authcode" && !draft().incoming.host) return;
+    const input =
+      mode() === "authcode"
+        ? authCodeSubmission(draft())
+        : accountInputForSubmission(draft());
     setBusy(action);
     setError("");
     setResult(undefined);
@@ -354,6 +411,130 @@ export function AccountEditor(props: {
     );
   }
 
+  function authCodeFields() {
+    const encryptionLabel = (server: ServerConfig) =>
+      server.encryption === "starttls" ? "STARTTLS" : "SSL";
+    return (
+      <>
+        <div class="auth-providers" role="group" aria-label="选择邮箱服务商">
+          <For each={AUTH_CODE_PROVIDERS}>
+            {(provider) => (
+              <button
+                type="button"
+                class="auth-provider"
+                classList={{
+                  "auth-provider--selected": guide()?.id === provider.id,
+                }}
+                aria-pressed={guide()?.id === provider.id}
+                onClick={() => chooseProvider(provider)}
+              >
+                {provider.name}
+              </button>
+            )}
+          </For>
+        </div>
+        <div class="auth-fields">
+          <label>
+            邮箱地址
+            <input
+              ref={emailInput}
+              name="email"
+              type="email"
+              required
+              maxlength="254"
+              autocomplete="email"
+              spellcheck={false}
+              placeholder={
+                guide()
+                  ? `name@${guide()!.domains[0]}`
+                  : "name@qq.com 或 name@163.com"
+              }
+              autofocus={!initial}
+              value={draft().email}
+              onInput={(event) => update({ email: event.currentTarget.value })}
+              onBlur={() => void discover()}
+            />
+          </label>
+          <Show when={draft().email.includes("@") && !detectedProvider()}>
+            <p class="field-help field-help--warning">
+              这不是 QQ
+              邮箱或网易邮箱的地址。其他邮箱请选择上方的「常见邮箱」或「自建 /
+              域名邮箱」。
+            </p>
+          </Show>
+          <Show when={guide()}>
+            {(provider) => (
+              <div class="auth-guide">
+                <strong>如何获取{provider().name}授权码</strong>
+                <ol>
+                  <For each={provider().steps}>{(step) => <li>{step}</li>}</For>
+                </ol>
+                <button
+                  type="button"
+                  class="button button--secondary"
+                  disabled={!desktopAvailable}
+                  onClick={() =>
+                    void openEmailLink(provider().webUrl).catch((error) =>
+                      setError(errorMessage(error)),
+                    )
+                  }
+                >
+                  在浏览器中打开{provider().name}
+                </button>
+              </div>
+            )}
+          </Show>
+          <label class="incoming-password">
+            授权码{" "}
+            <span class="optional">{initial ? "留空保留原授权码" : ""}</span>
+            <input
+              ref={passwordInput}
+              name="password"
+              type="password"
+              required={!initial}
+              maxlength="4096"
+              autocomplete="new-password"
+              spellcheck={false}
+              placeholder={
+                initial
+                  ? "已安全保存，输入可替换"
+                  : (guide()?.codeHint ?? "邮箱生成的授权码，不是登录密码")
+              }
+              value={draft().password ?? ""}
+              onInput={(event) =>
+                update({ password: event.currentTarget.value })
+              }
+            />
+          </label>
+          <label>
+            显示名称 <span class="optional">选填</span>
+            <input
+              name="displayName"
+              autocomplete="name"
+              maxlength="100"
+              placeholder="你的姓名或账户备注"
+              value={draft().displayName}
+              onInput={(event) =>
+                update({ displayName: event.currentTarget.value })
+              }
+            />
+          </label>
+          <Show when={detectedProvider() && draft().incoming.host}>
+            <p class="server-summary">
+              <Icon name="server" />
+              <span>
+                已自动填写服务器：收信 {draft().incoming.host}:
+                {draft().incoming.port}（{encryptionLabel(draft().incoming)}）·
+                发信 {draft().outgoing.host}:{draft().outgoing.port}（
+                {encryptionLabel(draft().outgoing)}）
+              </span>
+            </p>
+          </Show>
+        </div>
+      </>
+    );
+  }
+
   return (
     <dialog
       ref={dialog}
@@ -408,6 +589,21 @@ export function AccountEditor(props: {
                 type="button"
                 class="configuration-mode"
                 classList={{
+                  "configuration-mode--selected": mode() === "authcode",
+                }}
+                aria-pressed={mode() === "authcode"}
+                onClick={() => changeMode("authcode")}
+              >
+                <Icon name="shield" />
+                <span>
+                  <strong>QQ / 网易邮箱</strong>
+                  <small>使用授权码登录</small>
+                </span>
+              </button>
+              <button
+                type="button"
+                class="configuration-mode"
+                classList={{
                   "configuration-mode--selected": mode() === "automatic",
                 }}
                 aria-pressed={mode() === "automatic"}
@@ -435,86 +631,90 @@ export function AccountEditor(props: {
                 </span>
               </button>
             </div>
-            <Show when={mode() === "manual"}>
-              <p class="field-help manual-help">
-                请填写邮箱服务商或管理员提供的配置。收发信可使用同一服务器，登录用户名也可以与邮箱地址不同。
-              </p>
-            </Show>
-            <div class="email-row">
-              <label>
-                邮箱地址
-                <input
-                  ref={emailInput}
-                  name="email"
-                  type="email"
-                  required
-                  maxlength="254"
-                  autocomplete="email"
-                  spellcheck={false}
-                  placeholder="you@example.com"
-                  autofocus={!initial}
-                  value={draft().email}
-                  onInput={(event) =>
-                    update({ email: event.currentTarget.value })
-                  }
-                  onBlur={() => void discover()}
-                />
-              </label>
-              <Show when={mode() === "automatic"}>
-                <button
-                  class="button button--secondary"
-                  type="button"
-                  onClick={() => void discover(true)}
-                  disabled={
-                    !desktopAvailable || !draft().email || busy() === "discover"
-                  }
-                >
-                  自动配置
-                </button>
+            <Show when={mode() !== "authcode"} fallback={authCodeFields()}>
+              <Show when={mode() === "manual"}>
+                <p class="field-help manual-help">
+                  请填写邮箱服务商或管理员提供的配置。收发信可使用同一服务器，登录用户名也可以与邮箱地址不同。
+                </p>
               </Show>
-            </div>
-            <Show when={discovered()}>
-              {(config) => (
-                <div
-                  class={`provider-note ${config().source === "guess" ? "provider-note--guess" : ""}`}
-                >
-                  <strong>{config().provider ?? "自定义邮箱"}</strong>
-                  <p>
-                    {config().note ??
-                      "已填写该服务商的服务器配置，你也可以手动调整。"}
-                  </p>
-                  <Show when={config().auth === "oauth2"}>
+              <div class="email-row">
+                <label>
+                  邮箱地址
+                  <input
+                    ref={emailInput}
+                    name="email"
+                    type="email"
+                    required
+                    maxlength="254"
+                    autocomplete="email"
+                    spellcheck={false}
+                    placeholder="you@example.com"
+                    autofocus={!initial}
+                    value={draft().email}
+                    onInput={(event) =>
+                      update({ email: event.currentTarget.value })
+                    }
+                    onBlur={() => void discover()}
+                  />
+                </label>
+                <Show when={mode() === "automatic"}>
+                  <button
+                    class="button button--secondary"
+                    type="button"
+                    onClick={() => void discover(true)}
+                    disabled={
+                      !desktopAvailable ||
+                      !draft().email ||
+                      busy() === "discover"
+                    }
+                  >
+                    自动配置
+                  </button>
+                </Show>
+              </div>
+              <Show when={discovered()}>
+                {(config) => (
+                  <div
+                    class={`provider-note ${config().source === "guess" ? "provider-note--guess" : ""}`}
+                  >
+                    <strong>{config().provider ?? "自定义邮箱"}</strong>
                     <p>
-                      该服务商推荐官方授权登录，目前尚未接入。若你的账户支持应用专用密码，可使用下方表单；仅允许官方授权的账户暂时无法连接。
+                      {config().note ??
+                        "已填写该服务商的服务器配置，你也可以手动调整。"}
                     </p>
-                  </Show>
-                </div>
-              )}
+                    <Show when={config().auth === "oauth2"}>
+                      <p>
+                        该服务商推荐官方授权登录，目前尚未接入。若你的账户支持应用专用密码，可使用下方表单；仅允许官方授权的账户暂时无法连接。
+                      </p>
+                    </Show>
+                  </div>
+                )}
+              </Show>
+              <div class="display-name-field">
+                <label>
+                  显示名称 <span class="optional">选填</span>
+                  <input
+                    name="displayName"
+                    autocomplete="name"
+                    maxlength="100"
+                    placeholder="你的姓名或账户备注"
+                    value={draft().displayName}
+                    onInput={(event) =>
+                      update({ displayName: event.currentTarget.value })
+                    }
+                  />
+                </label>
+              </div>
+              <p class="field-help">
+                {mode() === "manual"
+                  ? "服务器地址应与 TLS 证书中的主机名一致；端口请以服务商提供的配置为准。"
+                  : "QQ、网易等邮箱请先开启 IMAP / SMTP，再使用授权码登录。"}
+              </p>
+              <div class="servers-grid">
+                {serverFields("incoming", "收信服务器", "IMAP")}
+                {serverFields("outgoing", "发信服务器", "SMTP")}
+              </div>
             </Show>
-            <div class="display-name-field">
-              <label>
-                显示名称 <span class="optional">选填</span>
-                <input
-                  name="displayName"
-                  autocomplete="name"
-                  maxlength="100"
-                  placeholder="你的姓名或账户备注"
-                  value={draft().displayName}
-                  onInput={(event) =>
-                    update({ displayName: event.currentTarget.value })
-                  }
-                />
-              </label>
-            </div>
-            <p class="field-help">
-              {mode() === "manual"
-                ? "服务器地址应与 TLS 证书中的主机名一致；端口请以服务商提供的配置为准。"
-                : "QQ、网易等邮箱请先开启 IMAP / SMTP，再使用授权码登录。"}
-            </p>
-            <div class="servers-grid">
-              {serverFields("incoming", "收信服务器", "IMAP")}
-              {serverFields("outgoing", "发信服务器", "SMTP")}
-            </div>
           </fieldset>
           <div class="credential-note">
             <Icon name="shield" />

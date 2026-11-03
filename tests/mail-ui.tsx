@@ -286,6 +286,9 @@ async function mockInvoke(command: string, args: Args = {}): Promise<unknown> {
       case "discover_config": {
         const email = String(args.email ?? "");
         if (!email.includes("@")) return null;
+        const builtin: Record<string, [string, string, string]> = { "qq.com": ["QQ 邮箱", "imap.qq.com", "smtp.qq.com"], "163.com": ["网易 163 邮箱", "imap.163.com", "smtp.163.com"] };
+        const known = builtin[email.split("@")[1].toLowerCase()];
+        if (known) return { provider: known[0], source: "builtin", incomingProtocol: "imap", incoming: { host: known[1], port: 993, encryption: "tls" }, outgoing: { host: known[2], port: 465, encryption: "tls" }, auth: "password", note: "需先在网页版邮箱设置中开启 IMAP/SMTP 服务，并使用生成的授权码代替登录密码。" };
         return { provider: "本地模拟服务商", source: "guess", incomingProtocol: "imap", incoming: { host: "mail.example.test", port: 993, encryption: "tls" }, outgoing: { host: "mail.example.test", port: 587, encryption: "starttls" }, auth: "password", note: "这是模拟配置，不会连接服务器。" };
       }
       case "test_account_connection": assertOnline(); return { incoming: { success: true, message: "模拟 IMAP 验证成功" }, outgoing: { success: true, message: "模拟 SMTP 验证成功" } };
@@ -327,7 +330,12 @@ function transformCallback(callback: (message: unknown) => void) { const id = ne
 function emitMock(event: string, payload: unknown) { for (const id of listeners.get(event) ?? []) callbacks.get(id)?.({ event, id, payload }); }
 
 // @tauri-apps/api/core.js checks globalThis.isTauri and delegates invoke directly here.
-Object.assign(window, { isTauri: true, __TAURI_INTERNALS__: { invoke: mockInvoke, transformCallback } });
+Object.assign(window, {
+  isTauri: true,
+  __TAURI_INTERNALS__: { invoke: mockInvoke, transformCallback },
+  // unlisten() in @tauri-apps/api/event calls this before invoking plugin:event|unlisten.
+  __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: (event: string, id: number) => { listeners.set(event, (listeners.get(event) ?? []).filter((item) => item !== id)); } },
+});
 document.getElementById("fixture-arrive")!.addEventListener("click", () => {
   // Same effect as the backend watcher: the server gets a message, the cache is synced, then mail-changed fires.
   const mailbox = requireBox(activeAccount);

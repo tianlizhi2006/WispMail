@@ -16,7 +16,10 @@ use crate::{
 };
 
 use super::{
-    connection::{ImapSession, open_imap_with_connector, smtp_transport_with_parameters},
+    connection::{
+        ImapSession, identify_client, open_imap_with_connector, requires_client_id,
+        smtp_transport_with_parameters,
+    },
     mailbox::{fetch_in_session, finish, list_in_session, sync_in_session},
     organize::{
         MailFlag, MessageSet, delete_permanently_in_session, move_in_session, set_flag_in_session,
@@ -823,5 +826,55 @@ async fn watcher_without_idle_polls_status_and_reports_only_real_changes() {
     .unwrap();
     // 第二次检查没有变化，不回调；第三次邮件数和 UIDNEXT 变化才回调。
     assert_eq!(calls, 2);
+    server.await.unwrap();
+}
+
+#[test]
+fn netease_hosts_require_the_imap_id_handshake() {
+    for host in [
+        "imap.163.com",
+        "IMAP.126.COM",
+        "imap.yeah.net.",
+        "imap.qiye.163.com",
+        "imaphz.qiye.163.com",
+        "imap.188.com",
+    ] {
+        assert!(requires_client_id(host), "{host}");
+    }
+    for host in [
+        "imap.qq.com",
+        "imap.example.com",
+        "not163.com",
+        "imap.163.com.evil.test",
+    ] {
+        assert!(!requires_client_id(host), "{host}");
+    }
+}
+
+#[tokio::test]
+async fn client_id_is_sent_and_a_rejection_keeps_the_session_usable() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let id = format!(
+        "ID (\"name\" \"WispMail\" \"version\" \"{}\" \"vendor\" \"WispMail\")",
+        env!("CARGO_PKG_VERSION")
+    );
+    let server = tokio::spawn(scripted_imap(
+        listener,
+        vec![
+            (
+                id.clone(),
+                "* ID (\"name\" \"Coremail Imap\")\r\n{tag} OK ID completed\r\n".into(),
+            ),
+            // 不支持 ID 的服务器返回 BAD：忽略，随后的命令照常进行。
+            (id, "{tag} BAD unknown command\r\n".into()),
+            ("EXAMINE \"INBOX\"".into(), selected(2, 9)),
+        ],
+    ));
+    let mut session = session(port).await;
+    identify_client(&mut session).await;
+    identify_client(&mut session).await;
+    session.examine("INBOX").await.unwrap();
+    finish(session, Ok(())).await.unwrap();
     server.await.unwrap();
 }

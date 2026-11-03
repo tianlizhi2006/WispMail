@@ -155,8 +155,42 @@ async fn check_imap_with_connector(
     connector: &TlsConnector,
 ) -> Result<(), &'static str> {
     let mut session = open_imap_with_connector(account, password, connector).await?;
+    // 登录成功不代表能读取邮件：部分服务商（如网易）直到打开文件夹时才拒绝，
+    // 只读打开收件箱可以在保存账户前发现这类问题。
+    let examined = timeout(Duration::from_secs(10), session.examine("INBOX")).await;
     let _ = timeout(Duration::from_secs(1), session.logout()).await;
-    Ok(())
+    match examined {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(_)) => Err(
+            "IMAP 已登录，但服务器不允许读取收件箱。请在网页版邮箱设置中确认已开启 IMAP 服务，并使用授权码登录。",
+        ),
+        Err(_) => Err("IMAP 已登录，但打开收件箱超时，请稍后重试。"),
+    }
+}
+
+/// 网易邮箱（163 / 126 / yeah.net / 188 及网易企业邮箱）要求登录后先用 IMAP ID（RFC 2971）
+/// 表明客户端身份，否则打开文件夹时返回 "Unsafe Login"。其他服务器不发送，避免多一次往返。
+pub(super) fn requires_client_id(host: &str) -> bool {
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    ["163.com", "126.com", "yeah.net", "188.com", "netease.com"]
+        .iter()
+        .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+}
+
+/// 发送客户端标识。服务器拒绝或不支持时忽略：之后打开文件夹的结果才是准确的判断依据。
+pub(super) async fn identify_client<T>(session: &mut Session<T>)
+where
+    T: AsyncRead + AsyncWrite + Unpin + Debug + Send,
+{
+    let _ = timeout(
+        Duration::from_secs(10),
+        session.id([
+            ("name", Some("WispMail")),
+            ("version", Some(env!("CARGO_PKG_VERSION"))),
+            ("vendor", Some("WispMail")),
+        ]),
+    )
+    .await;
 }
 
 pub(super) async fn open_imap_with_connector(
@@ -189,7 +223,11 @@ pub(super) async fn open_imap_with_connector(
     if server.encryption == Encryption::Tls {
         read_greeting(&mut client).await?;
     }
-    authenticate_imap_session(client, account.incoming_login(), password).await
+    let mut session = authenticate_imap_session(client, account.incoming_login(), password).await?;
+    if requires_client_id(&server.host) {
+        identify_client(&mut session).await;
+    }
+    Ok(session)
 }
 
 async fn read_greeting<T>(client: &mut Client<T>) -> Result<(), &'static str>
@@ -587,6 +625,20 @@ mod tests {
         reader
             .get_mut()
             .write_all(format!("{tag} OK Authenticated\r\n").as_bytes())
+            .await
+            .unwrap();
+        // 连接测试会只读打开收件箱，确认登录后确实可以读取邮件。
+        let examine = fixture_line(&mut reader).await;
+        assert!(examine.ends_with(" EXAMINE \"INBOX\"\r\n"), "{examine}");
+        let tag = examine.split_whitespace().next().unwrap();
+        reader
+            .get_mut()
+            .write_all(
+                format!(
+                    "* 0 EXISTS\r\n* OK [UIDVALIDITY 1] valid\r\n{tag} OK [READ-ONLY] done\r\n"
+                )
+                .as_bytes(),
+            )
             .await
             .unwrap();
         let logout = fixture_line(&mut reader).await;

@@ -1,6 +1,8 @@
 import type { Account, AccountInput } from "../../lib/types.ts";
+import { authCodeProviderFor, normalizeAuthCode } from "./authCodeProviders.ts";
 
-export type ConfigurationMode = "automatic" | "manual";
+/** authcode：QQ / 网易等授权码邮箱；automatic：其他常见邮箱；manual：自建 / 域名邮箱。 */
+export type ConfigurationMode = "authcode" | "automatic" | "manual";
 
 export function shouldDiscoverConfig(
   mode: ConfigurationMode,
@@ -9,7 +11,7 @@ export function shouldDiscoverConfig(
   force = false,
 ) {
   return (
-    mode === "automatic" &&
+    mode !== "manual" &&
     email.trim().length > 0 &&
     (force || email.trim() !== lastEmail)
   );
@@ -63,6 +65,37 @@ export function accountInputForSubmission(draft: AccountInput): AccountInput {
     outgoingUsername: draft.outgoingUsername.trim(),
     outgoingPassword: draft.useSamePassword ? null : draft.outgoingPassword,
   };
+}
+
+/**
+ * 授权码邮箱的提交内容：登录名就是邮箱地址，收发信共用同一个授权码，
+ * 并去掉复制授权码时夹带的空白。
+ */
+export function authCodeSubmission(draft: AccountInput): AccountInput {
+  return {
+    ...accountInputForSubmission({
+      ...draft,
+      incomingUsername: "",
+      outgoingUsername: "",
+      useSamePassword: true,
+    }),
+    password: draft.password
+      ? normalizeAuthCode(draft.password)
+      : draft.password,
+  };
+}
+
+/** 编辑已有账户时，按授权码邮箱方式保存的账户继续使用简化表单。 */
+export function initialModeFor(
+  account?: Account,
+): ConfigurationMode | undefined {
+  if (!account) return undefined;
+  return authCodeProviderFor(account.email) &&
+    account.useSamePassword &&
+    !account.incomingUsername &&
+    !account.outgoingUsername
+    ? "authcode"
+    : "manual";
 }
 
 /** 每次手动配置或切换模式使旧结果失效，关闭弹窗后也不会写回。 */
