@@ -651,8 +651,10 @@
 .next-step > .button {
   margin-left: auto;
 }
-.composer-dialog {
-  width: min(820px, calc(100vw - 40px));
+/* 与通用 .account-dialog 同级会被后加载的 App.css 覆盖，这里提高优先级。 */
+.account-dialog.composer-dialog {
+  width: min(980px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
 }
 .composer-fields {
   display: grid;
@@ -665,7 +667,8 @@
   display: block;
   width: 100%;
   resize: vertical;
-  min-height: 220px;
+  /* 窗口越高，正文区越高；矮屏仍保留可用的最小高度。 */
+  min-height: clamp(200px, 30vh, 520px);
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg);
