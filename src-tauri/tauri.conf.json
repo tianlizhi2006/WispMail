@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "WispMail",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.wispmail.app",
   "build": {
     "beforeDevCommand": "npm run dev",
