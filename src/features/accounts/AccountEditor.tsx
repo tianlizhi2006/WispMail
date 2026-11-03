@@ -862,7 +862,8 @@ export function AccountEditor(props: {
                         when={config().provider === "Outlook"}
                         fallback={
                           <p>
-                            该服务商推荐官方授权登录，目前尚未接入。若你的账户支持应用专用密码，可使用下方表单；仅允许官方授权的账户暂时无法连接。
+                            该服务商需要浏览器授权登录，WispMail
+                            暂不支持。若你的账户支持应用专用密码，可使用下方表单。
                           </p>
                         }
                       >

@@ -1,6 +1,8 @@
 # OAuth2 浏览器授权登录
 
-WispMail 用 OAuth2 登录微软账户：Outlook.com / Hotmail / Live，以及 Microsoft 365 工作或学校账户。Gmail 计划随后接入。
+WispMail 用 OAuth2 登录微软账户：Outlook.com / Hotmail / Live，以及 Microsoft 365 工作或学校账户。
+
+不计划接入 Gmail 的 OAuth 登录：Google 把读写邮件列为受限权限，未通过付费安全审核的应用最多只能给 100 个用户使用，登录时会显示“未验证的应用”警告；在测试状态下授权还会每 7 天失效。Gmail 用户可以开启两步验证后使用应用专用密码，按“常见邮箱”方式添加。
 
 ## 工作方式
 

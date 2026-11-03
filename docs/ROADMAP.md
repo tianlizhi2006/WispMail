@@ -86,9 +86,8 @@ README 说明"要做什么"，本文档说明"按什么顺序做、每一步做�
 
 ### M5 · 第一个公开版本 (v0.1)
 
-- [ ] Gmail / Outlook 的 OAuth2 登录
-  - [x] Outlook / Microsoft 365（授权码 + PKCE，XOAUTH2，见 [OAuth 说明](OAUTH.md)）
-  - [ ] Gmail
+- [x] Outlook / Microsoft 365 的 OAuth2 登录（授权码 + PKCE，XOAUTH2，见 [OAuth 说明](OAUTH.md)）
+  - Gmail 授权登录已取消：受限权限需要付费安全审核；Gmail 使用应用专用密码登录。
 - [ ] 统一收件箱
 - [ ] 多账户签名
 - [ ] POP3 收信

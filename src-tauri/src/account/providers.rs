@@ -49,6 +49,7 @@ struct Provider {
 const AUTH_CODE_NOTE: &str =
     "需先在网页版邮箱设置中开启 IMAP/SMTP 服务，并使用生成的授权码代替登录密码。";
 const APP_PASSWORD_NOTE: &str = "需在账户安全设置中生成“应用专用密码”，用它代替登录密码。";
+const GMAIL_NOTE: &str = "WispMail 不提供 Google 授权登录。请先为 Google 账户开启两步验证，再在 Google 账户的“安全性 → 应用专用密码”中生成密码，用它代替登录密码；部分账户（如学校或公司管理的账户）可能不允许使用应用专用密码。";
 
 const PROVIDERS: &[Provider] = &[
     Provider {
@@ -56,8 +57,8 @@ const PROVIDERS: &[Provider] = &[
         domains: &["gmail.com", "googlemail.com"],
         imap: ("imap.gmail.com", 993, Encryption::Tls),
         smtp: ("smtp.gmail.com", 465, Encryption::Tls),
-        auth: AuthMethod::OAuth2,
-        note: None,
+        auth: AuthMethod::Password,
+        note: Some(GMAIL_NOTE),
     },
     Provider {
         name: "Outlook",
@@ -199,9 +200,14 @@ mod tests {
     }
 
     #[test]
-    fn gmail_prefers_oauth() {
-        let cfg = autodiscover("me@gmail.com").unwrap();
-        assert_eq!(cfg.auth, AuthMethod::OAuth2);
+    fn gmail_uses_an_app_password_and_outlook_uses_oauth() {
+        let gmail = autodiscover("me@gmail.com").unwrap();
+        assert_eq!(gmail.auth, AuthMethod::Password);
+        assert!(gmail.note.unwrap().contains("应用专用密码"));
+        assert_eq!(
+            autodiscover("me@outlook.com").unwrap().auth,
+            AuthMethod::OAuth2
+        );
     }
 
     #[test]

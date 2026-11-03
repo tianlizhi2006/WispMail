@@ -39,7 +39,7 @@ pub enum Encryption {
 pub enum AuthMethod {
     /// 用户名加密码 / 授权码 / 应用专用密码。
     Password,
-    /// OAuth2 授权登录（Gmail、Outlook 等）。
+    /// OAuth2 浏览器授权登录（Outlook / Microsoft 365）。
     OAuth2,
 }
 
