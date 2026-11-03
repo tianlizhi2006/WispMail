@@ -1,15 +1,12 @@
 //! 托盘常驻：关闭窗口时隐藏到系统托盘，收件箱监视和新邮件通知继续工作；
 //! 托盘菜单可重新打开窗口、切换开机自启或退出。
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use tauri::{
     AppHandle, Manager, Window, WindowEvent,
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 use tauri_plugin_autostart::ManagerExt;
-use tauri_plugin_notification::NotificationExt;
 
 /// 开机自启时附带的参数：启动后直接留在托盘，不弹出窗口。
 pub const MINIMIZED_ARG: &str = "--minimized";
@@ -84,22 +81,12 @@ pub fn setup(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-/// 点击窗口关闭按钮时隐藏到托盘而不是退出；第一次隐藏时提示一次。
+/// 点击窗口关闭按钮时静默隐藏到托盘而不是退出。
 pub fn on_window_event(window: &Window, event: &WindowEvent) {
-    static HINT_SHOWN: AtomicBool = AtomicBool::new(false);
     if let WindowEvent::CloseRequested { api, .. } = event
         && window.label() == "main"
     {
         api.prevent_close();
         let _ = window.hide();
-        if !HINT_SHOWN.swap(true, Ordering::Relaxed) {
-            let _ = window
-                .app_handle()
-                .notification()
-                .builder()
-                .title("WispMail 仍在后台运行")
-                .body("新邮件到达时会提醒你。点击托盘图标重新打开，右键可退出。")
-                .show();
-        }
     }
 }
