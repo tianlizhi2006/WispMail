@@ -17,7 +17,8 @@ import {
   mergeMessagePages,
   messageKey,
   moveTargets,
-  senderName,
+  senderAddress,
+  splitSender,
   visibleFolders,
   refreshFirstPage,
   parseAddresses,
@@ -654,10 +655,20 @@ test("system folders stay hidden from the folder pane and move targets unless sh
   assert.deepEqual(names(moveTargets(folders, "INBOX")), ["Projects"]);
 });
 
-test("the message list shows only the sender's name, falling back to the address", () => {
-  assert.equal(senderName("测试同事 <colleague@example.test>"), "测试同事");
-  assert.equal(senderName('"Alice, Ops" <alice@example.com>'), "Alice, Ops");
-  assert.equal(senderName("<noreply@example.com>"), "noreply@example.com");
-  assert.equal(senderName("bob@example.com"), "bob@example.com");
-  assert.equal(senderName(""), "");
+test("senders split into name and address; the list shows only the address", () => {
+  assert.deepEqual(splitSender("测试同事 <colleague@example.test>"), {
+    name: "测试同事",
+    address: "colleague@example.test",
+  });
+  assert.deepEqual(splitSender('"Alice, Ops" <alice@example.com>'), {
+    name: "Alice, Ops",
+    address: "alice@example.com",
+  });
+  assert.equal(
+    senderAddress("测试同事 <colleague@example.test>"),
+    "colleague@example.test",
+  );
+  assert.equal(senderAddress("<noreply@example.com>"), "noreply@example.com");
+  assert.equal(senderAddress("bob@example.com"), "bob@example.com");
+  assert.equal(senderAddress(""), "");
 });

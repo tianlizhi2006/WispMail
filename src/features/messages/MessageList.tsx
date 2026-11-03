@@ -12,7 +12,7 @@ import type {
   MessageSummary,
   OrganizeAction,
 } from "../../lib/types";
-import { formatMailDate, messageKey, senderName } from "./mailHelpers";
+import { formatMailDate, messageKey, senderAddress } from "./mailHelpers";
 import { Icon } from "../../ui/Icon";
 
 export function MessageList(props: {
@@ -351,7 +351,7 @@ export function MessageList(props: {
                 >
                   <div class="message-row-top">
                     <span class="message-sender" title={message.from}>
-                      {senderName(message.from) || "未知发件人"}
+                      {senderAddress(message.from) || "未知发件人"}
                     </span>
                     <Show when={props.searching && props.folderOf}>
                       <span class="row-folder">

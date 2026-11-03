@@ -14,7 +14,11 @@ import type {
 } from "../../lib/types";
 import { errorMessage, openEmailLink } from "../../lib/api";
 import { Icon } from "../../ui/Icon";
-import { formatMailDate, formatSize } from "../messages/mailHelpers";
+import {
+  formatMailDate,
+  formatSize,
+  splitSender,
+} from "../messages/mailHelpers";
 import { renderMailDocument } from "./safeHtml";
 import { validateMailBridgeMessage } from "./mailResourceUrls";
 
@@ -242,7 +246,25 @@ export function MessageView(props: {
       </div>
       <header class="reader-header">
         <h2>{props.message.summary.subject || "（无主题）"}</h2>
-        <p class="reader-from">{props.message.summary.from || "未知发件人"}</p>
+        <p class="reader-from">
+          <Show
+            when={props.message.summary.from}
+            fallback={<strong>未知发件人</strong>}
+          >
+            {(from) => {
+              const sender = splitSender(from());
+              return (
+                <Show
+                  when={sender.name}
+                  fallback={<strong>{sender.address}</strong>}
+                >
+                  <strong>{sender.name}</strong>
+                  <span class="reader-from-address">{sender.address}</span>
+                </Show>
+              );
+            }}
+          </Show>
+        </p>
         <dl>
           <div>
             <dt>收件人</dt>

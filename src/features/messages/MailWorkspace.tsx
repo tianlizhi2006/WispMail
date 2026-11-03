@@ -1,4 +1,5 @@
 import {
+  createEffect,
   createMemo,
   createSignal,
   For,
@@ -106,6 +107,8 @@ export function MailWorkspace(props: {
   const searching = () => searchHits() !== null || searchLoading();
   const [notice, setNotice] = createSignal("");
   const [draftLoading, setDraftLoading] = createSignal(false);
+  /** 本地是否有未发送的草稿，用于在“写邮件”按钮上提示。 */
+  const [hasDraft, setHasDraft] = createSignal(false);
   const [composer, setComposer] = createSignal<{
     initial: ComposeMessage;
     saveInitially: boolean;
@@ -126,6 +129,18 @@ export function MailWorkspace(props: {
   let alive = true;
   let conflictDialog!: HTMLDialogElement;
   let deleteDialog!: HTMLDialogElement;
+
+  function refreshDraftFlag() {
+    void getDraft(accountId)
+      .then((draft) => {
+        if (alive) setHasDraft(!!draft);
+      })
+      .catch(() => undefined);
+  }
+  // 打开邮箱时以及每次关闭写信窗口后检查草稿。
+  createEffect(() => {
+    if (!composer()) refreshDraftFlag();
+  });
 
   onMount(() => {
     void loadFolders(true);
@@ -822,10 +837,7 @@ export function MailWorkspace(props: {
           <span class="brand-symbol">
             <Icon name="mail" />
           </span>
-          <div>
-            <strong>WispMail</strong>
-            <span>让邮件，轻一点</span>
-          </div>
+          <strong>WispMail</strong>
         </div>
         <label class="mail-account-select">
           <span class="visually-hidden">当前邮箱账户</span>
@@ -852,7 +864,10 @@ export function MailWorkspace(props: {
           onClick={() => void compose()}
         >
           <Icon name="compose" />
-          {draftLoading() ? "正在读取草稿…" : "写邮件 / 继续草稿"}
+          {draftLoading() ? "正在读取草稿…" : "写邮件"}
+          <Show when={hasDraft() && !draftLoading()}>
+            <span class="draft-badge">草稿</span>
+          </Show>
         </button>
         <FolderPane
           folders={folders()}
