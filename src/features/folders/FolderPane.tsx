@@ -1,6 +1,21 @@
-import { For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import type { MailFolder } from "../../lib/types";
-import { Icon } from "../../ui/Icon";
+import { Icon, type IconName } from "../../ui/Icon";
+import { visibleFolders } from "../messages/mailHelpers";
+
+const KIND_ICONS: Record<string, IconName> = {
+  inbox: "inbox",
+  drafts: "compose",
+  sent: "forward",
+  archive: "archive",
+  junk: "shield",
+  trash: "trash",
+};
+
+function folderIcon(folder: MailFolder): IconName {
+  if (folder.name.toUpperCase() === "INBOX") return "inbox";
+  return KIND_ICONS[folder.kind] ?? "folder";
+}
 
 export function FolderPane(props: {
   folders: MailFolder[];
@@ -10,6 +25,15 @@ export function FolderPane(props: {
   onSelect: (folder: MailFolder) => void;
   onRefresh: () => void;
 }) {
+  const [showHidden, setShowHidden] = createSignal(false);
+  const hiddenCount = createMemo(
+    () => props.folders.filter((folder) => folder.hidden).length,
+  );
+  // 当前选中的隐藏文件夹始终显示，避免选中项从列表中消失。
+  const shown = createMemo(() =>
+    visibleFolders(props.folders, showHidden(), props.selected),
+  );
+
   return (
     <nav class="mail-folders" aria-label="邮箱文件夹">
       <div class="section-label account-list-title">
@@ -37,32 +61,40 @@ export function FolderPane(props: {
           </p>
         }
       >
-        <For each={props.folders}>
+        <For each={shown()}>
           {(folder) => (
             <button
               type="button"
               class="folder-item"
               classList={{
                 "folder-item--selected": props.selected === folder.name,
+                "folder-item--group": !folder.selectable,
+                "folder-item--hidden": !!folder.hidden,
               }}
+              style={{ "padding-left": `${10 + (folder.depth ?? 0) * 16}px` }}
               disabled={!folder.selectable}
               aria-current={props.selected === folder.name ? "true" : undefined}
               onClick={() => props.onSelect(folder)}
             >
-              <Icon
-                name={
-                  folder.kind.toLowerCase().includes("inbox") ||
-                  folder.name.toUpperCase() === "INBOX"
-                    ? "inbox"
-                    : "mail"
-                }
-              />
+              <Icon name={folderIcon(folder)} />
               <span title={folder.name}>
                 {folder.displayName || folder.name}
               </span>
             </button>
           )}
         </For>
+        <Show when={hiddenCount()}>
+          <button
+            type="button"
+            class="folder-toggle"
+            aria-pressed={showHidden()}
+            onClick={() => setShowHidden((value) => !value)}
+          >
+            {showHidden()
+              ? "收起系统文件夹"
+              : `显示 ${hiddenCount()} 个隐藏的文件夹`}
+          </button>
+        </Show>
       </Show>
     </nav>
   );

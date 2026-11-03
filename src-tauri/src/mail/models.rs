@@ -7,13 +7,27 @@ pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 pub const MESSAGE_PAGE_SIZE: usize = 50;
 pub const MAX_ATTACHMENT_COUNT: usize = 20;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct MailFolder {
+    /// 服务器上的原始名称，用于所有 IMAP 操作。
     pub name: String,
+    /// 界面显示的名称：特殊文件夹为统一中文名，其他为层级中的最后一段。
     pub display_name: String,
     pub selectable: bool,
     pub kind: String,
+    /// 层级分隔符（如 "/" 或 "."）。
+    #[serde(default)]
+    pub delimiter: Option<String>,
+    /// 显示顺序；旧缓存缺省为 0，保持原有顺序。
+    #[serde(default)]
+    pub order: u32,
+    /// 缩进层级。
+    #[serde(default)]
+    pub depth: u8,
+    /// 服务商内部的系统文件夹或空分组，默认不显示。
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

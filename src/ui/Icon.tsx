@@ -1,6 +1,6 @@
 import type { JSX } from "solid-js";
 
-type IconName =
+export type IconName =
   | "mail"
   | "plus"
   | "arrow"

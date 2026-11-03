@@ -97,27 +97,7 @@ impl SpecialFolder {
     }
 
     fn names(self) -> &'static [&'static str] {
-        match self {
-            Self::Sent => &[
-                "sent",
-                "sent items",
-                "sent messages",
-                "sent mail",
-                "inbox.sent",
-                "已发送",
-                "已发送邮件",
-            ],
-            Self::Trash => &[
-                "trash",
-                "deleted",
-                "deleted items",
-                "deleted messages",
-                "inbox.trash",
-                "已删除",
-                "已删除邮件",
-            ],
-            Self::Archive => &["archive", "archives", "inbox.archive", "归档", "存档"],
-        }
+        super::folders::special_names(self.kind())
     }
 
     pub(super) fn find(self, folders: &[MailFolder]) -> Option<&MailFolder> {

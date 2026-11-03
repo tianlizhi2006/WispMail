@@ -1,6 +1,7 @@
 //! 邮件服务器通信：加密登录验证、文件夹与邮件读取、整理操作及 SMTP 发送。
 
 mod connection;
+mod folders;
 mod mailbox;
 mod organize;
 mod pool;

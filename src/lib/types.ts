@@ -86,10 +86,16 @@ export interface MessageSummary {
 }
 
 export interface MailFolder {
+  /** 服务器上的原始名称，用于所有操作。 */
   name: string;
+  /** 统一后的显示名称：特殊文件夹为中文名，其他为层级中的最后一段。 */
   displayName: string;
   selectable: boolean;
   kind: string;
+  /** 缩进层级（旧缓存缺省为 0）。 */
+  depth?: number;
+  /** 服务商内部的系统文件夹或空分组，默认不显示。 */
+  hidden?: boolean;
 }
 
 /** 本地全文搜索的结果：邮件摘要及所在文件夹。 */

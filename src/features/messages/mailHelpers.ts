@@ -510,13 +510,23 @@ export function removeHits(
   return { hits: remaining, next: after ?? before };
 }
 
-/** 可作为"移动到"目标的文件夹：可选择且不是当前文件夹。 */
-export function moveTargets<F extends { name: string; selectable: boolean }>(
+/** 可作为"移动到"目标的文件夹：可选择、未隐藏且不是当前文件夹。 */
+export function moveTargets<
+  F extends { name: string; selectable: boolean; hidden?: boolean },
+>(folders: F[], current?: string): F[] {
+  return folders.filter(
+    (folder) => folder.selectable && !folder.hidden && folder.name !== current,
+  );
+}
+
+/** 文件夹栏显示的文件夹：默认隐藏系统文件夹，但当前选中的始终显示。 */
+export function visibleFolders<F extends { name: string; hidden?: boolean }>(
   folders: F[],
-  current?: string,
+  showHidden: boolean,
+  selected?: string,
 ): F[] {
   return folders.filter(
-    (folder) => folder.selectable && folder.name !== current,
+    (folder) => showHidden || !folder.hidden || folder.name === selected,
   );
 }
 

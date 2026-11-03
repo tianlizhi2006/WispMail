@@ -163,7 +163,9 @@ export function MailWorkspace(props: {
           item.selectable &&
           (item.kind.toLowerCase().includes("inbox") ||
             item.name.toUpperCase() === "INBOX"),
-      ) ?? available.find((item) => item.selectable);
+      ) ??
+      available.find((item) => item.selectable && !item.hidden) ??
+      available.find((item) => item.selectable);
     if (next) selectFolder(next);
     else {
       listGuard.invalidate();

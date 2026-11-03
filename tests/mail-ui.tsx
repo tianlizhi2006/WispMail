@@ -49,6 +49,10 @@ const accounts: Account[] = [
 const folders: MailFolder[] = [
   { name: "INBOX", displayName: "收件箱", selectable: true, kind: "inbox" },
   { name: "Sent", displayName: "已发送", selectable: true, kind: "sent" },
+  { name: "Projects", displayName: "Projects", selectable: true, kind: "custom", depth: 0 },
+  { name: "Projects/2026", displayName: "2026", selectable: true, kind: "custom", depth: 1 },
+  { name: "Sync Issues", displayName: "同步问题", selectable: true, kind: "custom", hidden: true },
+  { name: "Sync Issues/Conflicts", displayName: "冲突", selectable: true, kind: "custom", depth: 1, hidden: true },
 ];
 interface FixtureMailbox { generation: number; incoming: MessageDetail[]; sent: MessageDetail[] }
 const mailboxes = new Map<string, FixtureMailbox>();

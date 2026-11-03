@@ -17,6 +17,7 @@ import {
   mergeMessagePages,
   messageKey,
   moveTargets,
+  visibleFolders,
   refreshFirstPage,
   parseAddresses,
   prepareSend,
@@ -629,4 +630,25 @@ test("a failed autosave does not block a later explicit save retry", async () =>
   await assert.rejects(writer.write("first"), /disk unavailable/);
   await writer.write("retry");
   assert.deepEqual(writes, ["retry"]);
+});
+
+test("system folders stay hidden from the folder pane and move targets unless shown or selected", () => {
+  const folders = [
+    { name: "INBOX", selectable: true },
+    { name: "Projects", selectable: true },
+    { name: "Sync Issues", selectable: true, hidden: true },
+    { name: "Sync Issues/Conflicts", selectable: true, hidden: true },
+  ];
+  const names = (list) => list.map((folder) => folder.name);
+  assert.deepEqual(names(visibleFolders(folders, false, "INBOX")), [
+    "INBOX",
+    "Projects",
+  ]);
+  assert.deepEqual(names(visibleFolders(folders, true)), names(folders));
+  assert.deepEqual(
+    names(visibleFolders(folders, false, "Sync Issues/Conflicts")),
+    ["INBOX", "Projects", "Sync Issues/Conflicts"],
+    "the selected folder never disappears",
+  );
+  assert.deepEqual(names(moveTargets(folders, "INBOX")), ["Projects"]);
 });

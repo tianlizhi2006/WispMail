@@ -48,11 +48,13 @@ pub async fn list_folders(
     account: &Account,
     credentials: &AccountCredentials,
 ) -> Result<Vec<MailFolder>, String> {
-    pool.run(account, credentials, |mut session| async move {
-        let result = list_in_session(&mut session).await;
-        (session, result)
-    })
-    .await
+    let folders = pool
+        .run(account, credentials, |mut session| async move {
+            let result = list_in_session(&mut session).await;
+            (session, result)
+        })
+        .await?;
+    Ok(super::folders::arrange(folders, &account.incoming.host))
 }
 
 pub(super) async fn list_in_session(session: &mut ImapSession) -> Result<Vec<MailFolder>, String> {
@@ -93,6 +95,8 @@ pub(super) async fn list_in_session(session: &mut ImapSession) -> Result<Vec<Mai
             display_name,
             selectable: !attributes.contains(&NameAttribute::NoSelect),
             kind: kind.to_string(),
+            delimiter: folder.delimiter().map(str::to_string),
+            ..MailFolder::default()
         });
     }
     folders.sort_by(|a, b| {

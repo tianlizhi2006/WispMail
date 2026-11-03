@@ -39,7 +39,12 @@ impl Store {
             "SELECT configuration FROM mail_folders WHERE account_id = ?1 ORDER BY rowid",
         )?;
         let rows = statement.query_map([account_id], |row| row.get::<_, String>(0))?;
-        rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+        let mut folders = rows
+            .map(|row| Ok(serde_json::from_str(&row?)?))
+            .collect::<Result<Vec<MailFolder>, StoreError>>()?;
+        // 稳定排序：旧缓存没有顺序字段时保持写入顺序。
+        folders.sort_by_key(|folder| folder.order);
+        Ok(folders)
     }
 
     pub fn replace_folders(
@@ -134,6 +139,8 @@ impl Store {
                 "other"
             }
             .into(),
+            order: u32::MAX,
+            ..MailFolder::default()
         };
         transaction.execute("INSERT INTO mail_folders(account_id, name, configuration) VALUES(?1,?2,?3) ON CONFLICT(account_id,name) DO NOTHING", params![account_id, folder, serde_json::to_string(&placeholder)?])?;
         if previous != Some(uid_validity) {
@@ -622,6 +629,7 @@ mod tests {
             display_name: name.into(),
             selectable: true,
             kind: "other".into(),
+            ..MailFolder::default()
         }
     }
 
@@ -631,6 +639,31 @@ mod tests {
             body: "Unsent text".into(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn cached_folders_follow_the_arranged_order_after_a_refresh() {
+        let store = store();
+        store
+            .replace_folders("a", &[folder("Zeta"), folder("INBOX"), folder("Alpha")])
+            .unwrap();
+        // 再次刷新时已有的行保留原位置，读取时必须按新的顺序字段排列。
+        let arranged: Vec<MailFolder> = ["INBOX", "Alpha", "Zeta"]
+            .iter()
+            .enumerate()
+            .map(|(order, name)| MailFolder {
+                order: order as u32,
+                ..folder(name)
+            })
+            .collect();
+        store.replace_folders("a", &arranged).unwrap();
+        let names: Vec<_> = store
+            .list_folders("a")
+            .unwrap()
+            .into_iter()
+            .map(|folder| folder.name)
+            .collect();
+        assert_eq!(names, ["INBOX", "Alpha", "Zeta"]);
     }
 
     #[test]
