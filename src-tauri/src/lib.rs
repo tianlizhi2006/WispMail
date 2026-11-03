@@ -64,6 +64,7 @@ pub fn run() {
             mail_commands::organize_messages,
             mail_commands::save_attachment,
             mail_commands::forward_attachments,
+            mail_commands::estimate_forward_size,
             mail_commands::open_email_link,
             mail_commands::get_draft,
             mail_commands::save_draft,

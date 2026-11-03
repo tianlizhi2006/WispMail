@@ -274,6 +274,73 @@ export function base64Size(value: string): number {
   );
 }
 
+/** 与后端一致：编码后的整封邮件不能超过 20 MiB。 */
+export const MAX_MESSAGE_BYTES = 20 * 1024 * 1024;
+
+const utf8 = new TextEncoder();
+
+/** Base64 编码后的字节数（每 76 个字符换行 CRLF）。 */
+export function base64EncodedSize(bytes: number): number {
+  const characters = Math.ceil(bytes / 3) * 4;
+  return characters + Math.ceil(characters / 76) * 2;
+}
+
+/**
+ * 正文编码后的大小：纯 ASCII 原样发送；含中文等字符时发送程序在
+ * quoted-printable（每个非 ASCII 字节变成 3 个字符）与 Base64 中取较短者。
+ */
+export function encodedTextSize(text: string): number {
+  const bytes = utf8.encode(text.replace(/\r?\n/g, "\r\n"));
+  let escaped = 0;
+  for (const byte of bytes) if (byte >= 0x80 || byte === 0x3d) escaped++;
+  if (escaped === 0) return bytes.length;
+  const quoted = bytes.length + escaped * 2;
+  return Math.min(
+    quoted + Math.ceil(quoted / 75) * 3,
+    base64EncodedSize(bytes.length),
+  );
+}
+
+/** 编码后的邮件头字段：非 ASCII 文字使用 Base64 编码字（=?utf-8?b?…?=）。 */
+function encodedHeaderSize(value: string): number {
+  const bytes = utf8.encode(value).length;
+  return /^[\x20-\x7e]*$/.test(value)
+    ? bytes
+    : base64EncodedSize(bytes) + Math.ceil(bytes / 45) * 14;
+}
+
+/**
+ * 预估发送时的整封邮件大小（字节），用于撰写窗口实时显示。
+ * forwardedBytes 为后端按实际编码算出的原邮件部分大小；转发时尚未得到则传 null。
+ */
+export function estimateMessageSize(
+  draft: ComposeMessage,
+  forwardedBytes: number | null = null,
+): number {
+  // From、Date、Message-ID、MIME-Version、Content-Type 等固定邮件头。
+  let size = 150 + encodedHeaderSize(draft.subject);
+  // 密送只在 SMTP 信封中，不写入邮件头。
+  for (const address of [...draft.to, ...draft.cc])
+    size += encodedHeaderSize(address) + 6;
+  for (const id of [
+    ...draft.references,
+    ...(draft.inReplyTo ? [draft.inReplyTo] : []),
+  ])
+    size += id.length + 4;
+  const text = encodedTextSize(draft.body);
+  if (draft.forward)
+    // 用户文字同时出现在纯文本和 HTML 两个版本中。
+    size += (forwardedBytes ?? 0) + text * 2 + 13;
+  else size += text + 90;
+  for (const attachment of draft.attachments)
+    size +=
+      base64EncodedSize(base64Size(attachment.dataBase64)) +
+      encodedHeaderSize(attachment.name) +
+      170;
+  if (draft.attachments.length) size += 160;
+  return size;
+}
+
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;

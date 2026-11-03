@@ -7,6 +7,7 @@ import type {
   DiscoveredConfig,
   ComposeMessage,
   ForwardAttachments,
+  ForwardSource,
   MailFolder,
   MessageDetail,
   MessagePage,
@@ -136,6 +137,19 @@ export function forwardAttachments(
   indices: number[],
 ): Promise<ForwardAttachments> {
   return command("forward_attachments", { ...ref, indices });
+}
+
+/** 转发原邮件部分编码后的字节数，撰写窗口据此实时估算邮件大小。 */
+export function estimateForwardSize(
+  accountId: string,
+  source: ForwardSource,
+): Promise<number> {
+  return command("estimate_forward_size", {
+    accountId,
+    folder: source.folder,
+    uid: source.uid,
+    uidValidity: source.uidValidity,
+  });
 }
 
 /** 仅由正文中明确的链接点击触发，后端只允许 HTTP(S) 和 mailto。 */

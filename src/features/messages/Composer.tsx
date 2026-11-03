@@ -1,7 +1,17 @@
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  on,
+  onCleanup,
+  onMount,
+  Show,
+} from "solid-js";
 import {
   clearDraft,
   errorMessage,
+  estimateForwardSize,
   saveDraft,
   sendMessage,
 } from "../../lib/api";
@@ -11,8 +21,10 @@ import {
   base64Size,
   composeKind,
   createDraftWriter,
+  estimateMessageSize,
   formatSize,
   MAX_ATTACHMENT_BYTES,
+  MAX_MESSAGE_BYTES,
   prepareSend,
 } from "./mailHelpers";
 
@@ -36,6 +48,48 @@ export function Composer(props: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let revision = 0;
   let savedRevision = 0;
+  // 转发的原邮件大小由后端按实际编码计算一次；之后随输入在本地实时估算整封邮件。
+  const [forwardBytes, setForwardBytes] = createSignal<
+    number | "pending" | "unknown"
+  >("pending");
+  const forwardKey = createMemo(() => {
+    const source = draft().forward;
+    return source
+      ? `${source.folder}\u0000${source.uid}\u0000${source.uidValidity}`
+      : "";
+  });
+  createEffect(
+    on(forwardKey, (key) => {
+      const source = draft().forward;
+      setForwardBytes("pending");
+      if (!key || !source) return;
+      let current = true;
+      onCleanup(() => {
+        current = false;
+      });
+      estimateForwardSize(props.account.id, source)
+        .then((bytes) => current && setForwardBytes(bytes))
+        .catch(() => current && setForwardBytes("unknown"));
+    }),
+  );
+  const messageSize = createMemo(() => {
+    const bytes = forwardBytes();
+    return estimateMessageSize(
+      draft(),
+      typeof bytes === "number" ? bytes : null,
+    );
+  });
+  const sizeRatio = () => messageSize() / MAX_MESSAGE_BYTES;
+  const sizeNote = () => {
+    if (sizeRatio() > 1) return "超过 20 MB 上限，无法发送";
+    if (!draft().forward) return "";
+    const bytes = forwardBytes();
+    return bytes === "pending"
+      ? "正在计算原邮件…"
+      : bytes === "unknown"
+        ? "原邮件大小暂未知"
+        : "";
+  };
   const writer = createDraftWriter<ComposeMessage>((value) =>
     saveDraft(props.account.id, value),
   );
@@ -379,12 +433,34 @@ export function Composer(props: {
           </Show>
         </div>
         <footer class="dialog-footer composer-footer">
-          <div class="draft-status" aria-live="polite">
-            {busy() === "send"
-              ? "正在发送，请勿重复操作…"
-              : busy() === "attachment"
-                ? "正在读取附件…"
-                : saveStatus()}
+          <div class="composer-meta">
+            <div class="draft-status" aria-live="polite">
+              {busy() === "send"
+                ? "正在发送，请勿重复操作…"
+                : busy() === "attachment"
+                  ? "正在读取附件…"
+                  : saveStatus()}
+            </div>
+            <div
+              class="size-estimate"
+              classList={{
+                "size-estimate--warn": sizeRatio() >= 0.8 && sizeRatio() <= 1,
+                "size-estimate--over": sizeRatio() > 1,
+              }}
+              title="按发送时的实际编码估算：附件经 Base64 编码后约增大 37%，转发时包含原邮件的排版与内嵌图片。"
+            >
+              <span class="size-bar" aria-hidden="true">
+                <span
+                  style={{ width: `${Math.min(100, sizeRatio() * 100)}%` }}
+                />
+              </span>
+              <span>
+                预计 <strong>{formatSize(messageSize())}</strong> / 20 MB
+                <Show when={sizeNote()}>
+                  <span class="size-note"> · {sizeNote()}</span>
+                </Show>
+              </span>
+            </div>
           </div>
           <div class="button-group">
             <button

@@ -7,7 +7,10 @@ import {
   createDraftWriter,
   createLruCache,
   createRequestGuard,
+  base64EncodedSize,
+  encodedTextSize,
   emptyMessage,
+  estimateMessageSize,
   forwardAttachmentIndexes,
   forwardMessage,
   MAX_ATTACHMENT_BYTES,
@@ -159,6 +162,79 @@ test("CID images embedded in the HTML are not forwarded again as attachments", (
     forwardAttachmentIndexes({ ...withImages, htmlBody: null }),
     [0, 1, 2],
     "without HTML nothing is embedded, so every attachment is kept",
+  );
+});
+
+test("size estimate matches the real encoded size measured from the Rust MIME builder", () => {
+  // 实测值来自后端 build_message（lettre）对相同内容生成的邮件字节数。
+  const fill = (n) => btoa(String.fromCharCode(...new Uint8Array(n).fill(7)));
+  const big = (n) => {
+    let out = "";
+    for (let left = n; left > 0; left -= 30000)
+      out += fill(Math.min(30000, left));
+    return out;
+  };
+  const base = {
+    ...emptyMessage(),
+    to: ["to@example.com"],
+    cc: ["cc@example.com"],
+    bcc: ["hidden@example.com"],
+    subject: "测试邮件 Fixture",
+  };
+  const pdf = (sizes) =>
+    sizes.map((n, i) => ({
+      name: `报告${i}.pdf`,
+      mimeType: "application/pdf",
+      dataBase64: big(n),
+    }));
+  const cases = [
+    [{ ...base, body: "hello world\nsecond line" }, null, 349],
+    [{ ...base, body: "中文正文测试".repeat(300) }, null, 7715],
+    [{ ...base, body: "hi", attachments: pdf([1_000_000]) }, null, 1369120],
+    [
+      {
+        ...base,
+        body: "中文".repeat(100),
+        attachments: pdf([300_000, 12_345, 5]),
+      },
+      null,
+      429325,
+    ],
+    [
+      {
+        ...base,
+        bcc: [],
+        body: "请查看下面的邮件，谢谢。".repeat(40),
+        forward: { folder: "INBOX", uid: 1, uidValidity: 1, label: "x" },
+      },
+      4355,
+      8544,
+    ],
+  ];
+  for (const [draft, forwarded, real] of cases) {
+    const estimate = estimateMessageSize(draft, forwarded);
+    assert.ok(
+      Math.abs(estimate - real) / real < 0.01,
+      `estimate ${estimate} vs real ${real}`,
+    );
+  }
+});
+
+test("size helpers follow Base64 and quoted-printable encoding rules", () => {
+  assert.equal(base64EncodedSize(0), 0);
+  assert.equal(base64EncodedSize(57), 78, "one full 76-char line plus CRLF");
+  assert.equal(encodedTextSize("abc"), 3, "ASCII is sent as-is");
+  assert.equal(encodedTextSize("a\nb"), 4, "line breaks become CRLF");
+  // 纯中文时 Base64 比 quoted-printable 短（每字 3 字节 → 4 字符 vs 9 字符）。
+  assert.equal(encodedTextSize("中".repeat(19)), base64EncodedSize(57));
+  const withForward = {
+    ...emptyMessage(),
+    forward: { folder: "INBOX", uid: 1, uidValidity: 1, label: "x" },
+  };
+  assert.ok(
+    estimateMessageSize(withForward, 50_000) >
+      estimateMessageSize(withForward, null) + 49_000,
+    "the original message size is included once known",
   );
 });
 

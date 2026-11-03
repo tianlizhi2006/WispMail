@@ -728,3 +728,26 @@ fn forward_sends_html_with_cid_images_inline_and_keeps_attachments() {
             .any(|item| item.name == "example.txt")
     );
 }
+
+#[test]
+fn forwarded_part_size_matches_the_built_message_except_for_headers() {
+    use crate::mail::{ForwardBodies, InlineImage};
+    use crate::sync::forwarded_part_size;
+    let forward = ForwardBodies {
+        text: "\n\n---------- 转发的邮件 ----------\n原文".into(),
+        html: Some(format!("<p>{}</p><img src=\"cid:a@b\">", "长".repeat(5000))),
+        inline: vec![InlineImage {
+            content_id: "a@b".into(),
+            mime_type: "image/png".into(),
+            data: include_bytes!("../../icons/32x32.png").to_vec(),
+        }],
+    };
+    let estimate = forwarded_part_size(&forward).unwrap();
+    let mut message = compose();
+    message.body.clear();
+    message.attachments.clear();
+    let (built, _) = build_message(&account(), &message, Some(&forward)).unwrap();
+    let headers = built.formatted().len() - estimate;
+    // 剩下的只有邮件头（发件人、收件人、主题、Message-ID 等），与正文大小无关。
+    assert!((200..1500).contains(&headers), "header overhead {headers}");
+}

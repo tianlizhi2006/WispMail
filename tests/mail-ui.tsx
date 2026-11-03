@@ -239,6 +239,7 @@ async function mockInvoke(command: string, args: Args = {}): Promise<unknown> {
         return { target, needsPermanentDelete: false };
       }
       case "save_attachment": return null; // Simulate cancellation, never write a local file.
+      case "estimate_forward_size": return 48_000 + uid * 1000;
       case "forward_attachments": {
         const detail = bodies.get(bodyKey(accountId, folder, uid, validity)) ?? remoteDetail(accountId, folder, uid, validity);
         const wanted = new Set(args.indices as number[]);

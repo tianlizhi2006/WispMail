@@ -599,6 +599,23 @@ pub async fn forward_attachments(
         .map_err(|_| "读取原邮件附件未完成，请重试。".to_string())?
 }
 
+/// 转发原邮件部分编码后的字节数（优先使用本地缓存），撰写窗口据此实时估算邮件大小。
+#[tauri::command]
+pub async fn estimate_forward_size(
+    account_id: String,
+    folder: String,
+    uid: u32,
+    uid_validity: u32,
+    state: tauri::State<'_, AccountsState>,
+) -> Result<u64, String> {
+    let original = load_detail(&state, account_id, folder, uid, uid_validity).await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        sync::forwarded_part_size(&mail::forward_bodies("", &original)).map(|size| size as u64)
+    })
+    .await
+    .map_err(|_| "无法计算原邮件大小。".to_string())?
+}
+
 fn external_email_url(value: &str) -> Result<String, String> {
     if value.len() > 8192 || value.chars().any(char::is_control) {
         return Err("邮件链接过长或格式无效。".into());

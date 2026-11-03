@@ -142,6 +142,15 @@ fn body(compose: &ComposeMessage, forward: Option<&ForwardBodies>) -> Result<Bod
     ))
 }
 
+/// 转发时附上的原邮件部分（用户文字为空）编码后的字节数，供撰写窗口估算邮件大小。
+/// 与发送时使用同一套 MIME 构造，结果与实际编码一致。
+pub fn forwarded_part_size(forward: &ForwardBodies) -> Result<usize, String> {
+    Ok(match body(&ComposeMessage::default(), Some(forward))? {
+        Body::Single(part) => part.formatted().len(),
+        Body::Multi(part) => part.formatted().len(),
+    })
+}
+
 pub(super) fn build_message(
     account: &Account,
     compose: &ComposeMessage,

@@ -16,4 +16,4 @@ pub use organize::{
     set_flags, trash_messages,
 };
 pub use pool::ImapPool;
-pub use sender::send_message;
+pub use sender::{forwarded_part_size, send_message};

@@ -760,6 +760,53 @@
   font-size: 10px;
   color: var(--text-muted);
 }
+.composer-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.size-estimate {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.size-estimate strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.size-bar {
+  flex-shrink: 0;
+  width: 64px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-muted);
+  overflow: hidden;
+}
+.size-bar > span {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+.size-estimate--warn .size-bar > span {
+  background: var(--warning);
+}
+.size-estimate--warn strong {
+  color: var(--warning);
+}
+.size-estimate--over .size-bar > span {
+  background: var(--danger);
+}
+.size-estimate--over strong,
+.size-estimate--over .size-note {
+  color: var(--danger);
+}
 .draft-discard-confirm {
   padding: 13px;
   margin-top: 16px;
@@ -876,7 +923,7 @@
   .composer-footer {
     justify-content: flex-end;
   }
-  .composer-footer > .draft-status {
+  .composer-footer > .composer-meta {
     width: 100%;
   }
   .compose-attachments {
