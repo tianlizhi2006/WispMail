@@ -86,6 +86,18 @@ pub struct ForwardAttachments {
     pub skipped: Vec<String>,
 }
 
+/// 转发的原邮件（同一账户）。草稿只保存位置；发送时后端读取原文，
+/// 把原邮件的 HTML 排版和内嵌图片附在用户文字下方。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardSource {
+    pub folder: String,
+    pub uid: u32,
+    pub uid_validity: u32,
+    /// 撰写窗口里显示的原邮件说明（主题 · 发件人），不参与发送。
+    pub label: String,
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ComposeMessage {
@@ -97,6 +109,8 @@ pub struct ComposeMessage {
     pub in_reply_to: Option<String>,
     pub references: Vec<String>,
     pub attachments: Vec<OutgoingAttachment>,
+    #[serde(default)]
+    pub forward: Option<ForwardSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +176,16 @@ pub fn validate_compose(message: &ComposeMessage, require_recipients: bool) -> R
         if id.is_empty() || id.len() > 998 || id.chars().any(char::is_control) {
             return Err("回复邮件标识无效。".into());
         }
+    }
+    if let Some(source) = &message.forward
+        && (source.folder.is_empty()
+            || source.folder.len() > 1000
+            || source.folder.chars().any(char::is_control)
+            || source.uid == 0
+            || source.label.len() > 2000
+            || source.label.chars().any(char::is_control))
+    {
+        return Err("转发的原邮件信息无效，请重新打开原邮件后转发。".into());
     }
     if message.attachments.len() > MAX_ATTACHMENT_COUNT {
         return Err(format!("单封邮件最多添加 {MAX_ATTACHMENT_COUNT} 个附件。"));

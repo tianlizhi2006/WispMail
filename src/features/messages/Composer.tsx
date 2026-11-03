@@ -280,6 +280,28 @@ export function Composer(props: {
                 onInput={(event) => update({ body: event.currentTarget.value })}
               />
             </label>
+            <Show when={draft().forward}>
+              {(source) => (
+                <div class="forward-original">
+                  <Icon name="forward" />
+                  <div>
+                    <strong title={source().label}>{source().label}</strong>
+                    <small>
+                      原邮件的排版、内嵌图片和邮件头会附在你的文字下方发送
+                    </small>
+                  </div>
+                  <button
+                    type="button"
+                    class="icon-button"
+                    aria-label="不附带原邮件"
+                    title="不附带原邮件"
+                    onClick={() => update({ forward: null })}
+                  >
+                    <Icon name="close" />
+                  </button>
+                </div>
+              )}
+            </Show>
             <input
               ref={fileInput}
               class="visually-hidden"

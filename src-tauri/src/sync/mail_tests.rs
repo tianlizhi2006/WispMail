@@ -527,6 +527,7 @@ fn compose() -> ComposeMessage {
             mime_type: "text/plain".into(),
             data_base64: STANDARD.encode(b"fixture-attachment"),
         }],
+        forward: None,
     }
 }
 
@@ -591,7 +592,7 @@ async fn smtp_data_contains_message_and_attachment_but_not_bcc_header() {
     let mut account = account();
     account.outgoing.port = listener.local_addr().unwrap().port();
     let server = tokio::spawn(smtp_receive(listener, true));
-    let (message, id) = build_message(&account, &compose()).unwrap();
+    let (message, id) = build_message(&account, &compose(), None).unwrap();
     let raw = message.formatted();
     let transport =
         smtp_transport_with_parameters(&account, "outgoing-secret", smtp_parameters()).unwrap();
@@ -626,7 +627,7 @@ async fn disconnected_after_data_reports_uncertainty_without_retry_or_archiving(
     let mut account = account();
     account.outgoing.port = listener.local_addr().unwrap().port();
     let server = tokio::spawn(smtp_receive(listener, false));
-    let (message, id) = build_message(&account, &compose()).unwrap();
+    let (message, id) = build_message(&account, &compose(), None).unwrap();
     let raw = message.formatted();
     let transport =
         smtp_transport_with_parameters(&account, "outgoing-secret", smtp_parameters()).unwrap();
@@ -642,7 +643,7 @@ async fn disconnected_after_data_reports_uncertainty_without_retry_or_archiving(
 
 #[tokio::test]
 async fn sent_archive_appends_same_mime_to_special_use_folder() {
-    let (message, _) = build_message(&account(), &compose()).unwrap();
+    let (message, _) = build_message(&account(), &compose(), None).unwrap();
     let raw = message.formatted();
     let expected = raw.clone();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -681,7 +682,49 @@ async fn sent_archive_appends_same_mime_to_special_use_folder() {
 fn rejects_reply_header_injection_before_any_network_io() {
     let mut message = compose();
     message.in_reply_to = Some("<good@example.com>\r\nBcc: injected@example.com".into());
-    assert!(build_message(&account(), &message).is_err());
+    assert!(build_message(&account(), &message, None).is_err());
     message.in_reply_to = Some("missing-at-sign".into());
-    assert!(build_message(&account(), &message).is_err());
+    assert!(build_message(&account(), &message, None).is_err());
+}
+
+#[test]
+fn forward_sends_html_with_cid_images_inline_and_keeps_attachments() {
+    use crate::mail::{ForwardBodies, InlineImage, parse_message, parse_summary};
+    let png = include_bytes!("../../icons/32x32.png").to_vec();
+    let forward = ForwardBodies {
+        text: "FYI\n\n---------- 转发的邮件 ----------\nOriginal text".into(),
+        html: Some(
+            "<!DOCTYPE html><html><body><p>FYI</p><img src=\"cid:logo@x\"></body></html>".into(),
+        ),
+        inline: vec![InlineImage {
+            content_id: "logo@x".into(),
+            mime_type: "image/png".into(),
+            data: png.clone(),
+        }],
+    };
+    let (message, _) = build_message(&account(), &compose(), Some(&forward)).unwrap();
+    let raw = message.formatted();
+    let text = String::from_utf8_lossy(&raw);
+    for expected in [
+        "multipart/mixed",
+        "multipart/alternative",
+        "multipart/related",
+        "Content-ID: <logo@x>",
+    ] {
+        assert!(text.contains(expected), "missing {expected}");
+    }
+    // 用阅读器自己的解析流程验证：HTML 正文、内嵌图片和普通附件各归其位。
+    let summary = parse_summary(&raw, 1, 1, false, false, raw.len() as u32).unwrap();
+    let detail = parse_message(&raw, summary).unwrap();
+    assert!(detail.html_body.unwrap().contains("cid:logo@x"));
+    assert!(detail.text_body.contains("Original text"));
+    let image = &detail.inline_resources[0];
+    assert_eq!(image.content_id.as_deref(), Some("logo@x"));
+    assert_eq!(STANDARD.decode(&image.data_base64).unwrap(), png);
+    assert!(
+        detail
+            .attachments
+            .iter()
+            .any(|item| item.name == "example.txt")
+    );
 }

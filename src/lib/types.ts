@@ -134,6 +134,16 @@ export interface ComposeMessage {
   inReplyTo?: string | null;
   references: string[];
   attachments: ComposeAttachment[];
+  /** 转发的原邮件；发送时后端把它的 HTML 排版与内嵌图片附在正文下方。 */
+  forward?: ForwardSource | null;
+}
+
+/** 转发的原邮件位置（同一账户）；label 只用于撰写窗口显示。 */
+export interface ForwardSource {
+  folder: string;
+  uid: number;
+  uidValidity: number;
+  label: string;
 }
 
 /** 转发时取出的原邮件附件；skipped 为超出发送限制或已损坏、未能附上的附件名。 */

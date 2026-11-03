@@ -239,10 +239,20 @@ pub async fn get_message(
     uid_validity: u32,
     state: tauri::State<'_, AccountsState>,
 ) -> Result<MessageDetail, String> {
+    load_detail(&state, account_id, folder, uid, uid_validity).await
+}
+
+async fn load_detail(
+    state: &AccountsState,
+    account_id: String,
+    folder: String,
+    uid: u32,
+    uid_validity: u32,
+) -> Result<MessageDetail, String> {
     // 快速路径：已解析的正文直接从数据库返回，不重新解析 MIME，也不连接服务器。
     let lookup_account = account_id.clone();
     let lookup_folder = folder.clone();
-    let cached = with_accounts(&state, move |service| {
+    let cached = with_accounts(state, move |service| {
         service.get_account(&lookup_account)?;
         service
             .store()
@@ -253,16 +263,10 @@ pub async fn get_message(
     if let Some(detail) = cached {
         return Ok(detail);
     }
-    let (summary, raw) = message_data(
-        &state,
-        account_id.clone(),
-        folder.clone(),
-        uid,
-        uid_validity,
-    )
-    .await?;
+    let (summary, raw) =
+        message_data(state, account_id.clone(), folder.clone(), uid, uid_validity).await?;
     let (raw, detail) = parse(raw, summary).await?;
-    store_detail(&state, account_id, folder, uid, uid_validity, raw, detail).await
+    store_detail(state, account_id, folder, uid, uid_validity, raw, detail).await
 }
 
 /// 每次预取的邮件数量与总字节上限：一次批量 FETCH，避免逐封往返。
@@ -672,8 +676,33 @@ pub async fn send_message(
     message: ComposeMessage,
     state: tauri::State<'_, AccountsState>,
 ) -> Result<SendResult, String> {
+    // 转发：先读取原邮件（优先本地缓存），失败时尚未连接 SMTP，不会产生半封邮件。
+    let forward = match &message.forward {
+        Some(source) => {
+            let original = load_detail(
+                &state,
+                account_id.clone(),
+                source.folder.clone(),
+                source.uid,
+                source.uid_validity,
+            )
+            .await
+            .map_err(|error| {
+                format!("无法读取要转发的原邮件：{error} 可在撰写窗口移除原邮件后再发送。")
+            })?;
+            let body = message.body.clone();
+            Some(
+                tauri::async_runtime::spawn_blocking(move || {
+                    mail::forward_bodies(&body, &original)
+                })
+                .await
+                .map_err(|_| "生成转发正文失败，请重试。".to_string())?,
+            )
+        }
+        None => None,
+    };
     let (account, credentials, _permit) = connection(&state, account_id).await?;
-    let mut result = sync::send_message(&account, &credentials, &message).await?;
+    let mut result = sync::send_message(&account, &credentials, &message, forward.as_ref()).await?;
     // SMTP 已接受邮件后，本地清理失败不能转成“发送失败”，以免用户重复发送。
     let cleanup = with_accounts(&state, move |service| {
         ensure_current(service, &account)?;

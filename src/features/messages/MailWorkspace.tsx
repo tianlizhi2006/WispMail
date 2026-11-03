@@ -37,6 +37,7 @@ import {
   createLruCache,
   createRequestGuard,
   emptyMessage,
+  forwardAttachmentIndexes,
   forwardMessage,
   mergeMessagePages,
   messageKey,
@@ -641,10 +642,11 @@ export function MailWorkspace(props: {
     setForwardBusy(true);
     try {
       let attachments: ComposeAttachment[] = [];
-      if (loaded.attachments.length) {
+      const indexes = forwardAttachmentIndexes(loaded);
+      if (indexes.length) {
         const result = await forwardAttachments(
           refFor(loaded.summary),
-          loaded.attachments.map((attachment) => attachment.index),
+          indexes,
         );
         if (!alive) return;
         attachments = result.attachments;
@@ -653,7 +655,7 @@ export function MailWorkspace(props: {
             `以下附件超出发送限制（合计 10 MB、最多 20 个）或已损坏，未随转发附上：${result.skipped.join("、")}`,
           );
       }
-      await compose(forwardMessage(loaded, attachments));
+      await compose(forwardMessage(loaded, target.name, attachments));
     } catch (error) {
       if (alive) setNotice(`无法转发：${errorMessage(error)}`);
     } finally {

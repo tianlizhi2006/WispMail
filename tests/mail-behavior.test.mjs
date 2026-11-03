@@ -8,6 +8,7 @@ import {
   createLruCache,
   createRequestGuard,
   emptyMessage,
+  forwardAttachmentIndexes,
   forwardMessage,
   MAX_ATTACHMENT_BYTES,
   mergeMessagePages,
@@ -88,34 +89,76 @@ test("checked messages follow the current list and ignore other UID generations"
   assert.deepEqual(checkedMessages(list, new Set()), []);
 });
 
-test("forward keeps original headers, body and attachments without reply threading", () => {
+test("forward references the original instead of flattening it into text", () => {
   const attachments = [
     { name: "a.pdf", mimeType: "application/pdf", dataBase64: "AAECAw==" },
   ];
-  const forwarded = forwardMessage(detail, attachments);
+  const forwarded = forwardMessage(detail, "INBOX", attachments);
   assert.equal(forwarded.subject, "Fwd: Project notes");
   assert.deepEqual(forwarded.to, []);
   assert.equal(forwarded.inReplyTo, null);
   assert.deepEqual(forwarded.references, []);
   assert.deepEqual(forwarded.attachments, attachments);
-  assert.match(forwarded.body, /---------- 转发的邮件 ----------/);
-  assert.match(forwarded.body, /主题：Project notes/);
-  assert.match(forwarded.body, /抄送：copy@example.com/);
-  assert.match(forwarded.body, /First line\nSecond line/);
+  // 原邮件（HTML 排版和内嵌图片）由后端在发送时附上，正文只留给用户自己的文字。
+  assert.equal(forwarded.body, "");
+  assert.deepEqual(forwarded.forward, {
+    folder: "INBOX",
+    uid: 17,
+    uidValidity: 4,
+    label: 'Project notes · "Doe, Jane" <jane@example.com>',
+  });
   assert.equal(composeKind(forwarded), "forward");
   assert.equal(
     composeKind(replyMessage(detail, "me@example.com", false)),
     "reply",
   );
   assert.equal(composeKind(emptyMessage()), "new");
-  const again = forwardMessage({
-    ...detail,
-    summary: { ...detail.summary, subject: "转发：周报\r\nBcc: x@y.z" },
-  });
+  const again = forwardMessage(
+    {
+      ...detail,
+      summary: { ...detail.summary, subject: "转发：周报\r\nBcc: x@y.z" },
+    },
+    "INBOX",
+  );
   assert.equal(
     again.subject,
     "转发：周报  Bcc: x@y.z",
     "no double prefix or header injection",
+  );
+});
+
+test("CID images embedded in the HTML are not forwarded again as attachments", () => {
+  const withImages = {
+    ...detail,
+    htmlBody: '<img src="cid:logo">',
+    inlineResources: [
+      {
+        contentId: "logo",
+        contentLocation: null,
+        mimeType: "image/png",
+        dataBase64: "",
+        attachmentIndex: 0,
+      },
+      {
+        contentId: null,
+        contentLocation: "a.png",
+        mimeType: "image/png",
+        dataBase64: "",
+        attachmentIndex: 1,
+      },
+    ],
+    attachments: [0, 1, 2].map((index) => ({
+      index,
+      name: `f${index}`,
+      mimeType: "image/png",
+      size: 1,
+    })),
+  };
+  assert.deepEqual(forwardAttachmentIndexes(withImages), [1, 2]);
+  assert.deepEqual(
+    forwardAttachmentIndexes({ ...withImages, htmlBody: null }),
+    [0, 1, 2],
+    "without HTML nothing is embedded, so every attachment is kept",
   );
 });
 

@@ -12,7 +12,8 @@ use tokio::time::timeout;
 use crate::{
     account::{Account, AccountCredentials},
     mail::{
-        ComposeMessage, MAX_ATTACHMENT_BYTES, MAX_RAW_MESSAGE_BYTES, SendResult, validate_compose,
+        ComposeMessage, ForwardBodies, MAX_ATTACHMENT_BYTES, MAX_RAW_MESSAGE_BYTES, SendResult,
+        valid_mime_type, validate_compose,
     },
 };
 
@@ -26,8 +27,9 @@ pub async fn send_message(
     account: &Account,
     credentials: &AccountCredentials,
     compose: &ComposeMessage,
+    forward: Option<&ForwardBodies>,
 ) -> Result<SendResult, String> {
-    let (message, message_id) = build_message(account, compose)?;
+    let (message, message_id) = build_message(account, compose, forward)?;
     let raw = message.formatted();
     if raw.len() > MAX_RAW_MESSAGE_BYTES {
         return Err("编码后的邮件超过 20 MiB，请减少附件或正文。".into());
@@ -92,9 +94,58 @@ pub(super) async fn archive_in_session(
         .map_err(|_| "服务器未确认已发送邮件的归档，副本可能已存在。".to_string())
 }
 
+/// 正文部件：纯文本，或转发时的 alternative（纯文本 + HTML，HTML 与内嵌图片组成 related）。
+enum Body {
+    Single(SinglePart),
+    Multi(MultiPart),
+}
+
+impl Body {
+    fn add_to(self, parts: MultiPart) -> MultiPart {
+        match self {
+            Body::Single(part) => parts.singlepart(part),
+            Body::Multi(part) => parts.multipart(part),
+        }
+    }
+}
+
+fn body(compose: &ComposeMessage, forward: Option<&ForwardBodies>) -> Result<Body, String> {
+    let Some(forward) = forward else {
+        return Ok(Body::Single(SinglePart::plain(compose.body.clone())));
+    };
+    let text = SinglePart::plain(forward.text.clone());
+    let Some(html) = &forward.html else {
+        return Ok(Body::Single(text));
+    };
+    let html = SinglePart::html(html.clone());
+    let html = if forward.inline.is_empty() {
+        Body::Single(html)
+    } else {
+        let mut related = MultiPart::related().singlepart(html);
+        for image in &forward.inline {
+            let mime = if valid_mime_type(&image.mime_type) {
+                image.mime_type.as_str()
+            } else {
+                "application/octet-stream"
+            };
+            let content_type =
+                ContentType::parse(mime).map_err(|_| "内嵌图片类型无效。".to_string())?;
+            related = related.singlepart(
+                Attachment::new_inline(image.content_id.clone())
+                    .body(image.data.clone(), content_type),
+            );
+        }
+        Body::Multi(related)
+    };
+    Ok(Body::Multi(
+        html.add_to(MultiPart::alternative().singlepart(text)),
+    ))
+}
+
 pub(super) fn build_message(
     account: &Account,
     compose: &ComposeMessage,
+    forward: Option<&ForwardBodies>,
 ) -> Result<(Message, String), String> {
     validate_compose(compose, true)?;
     if account.email.chars().any(char::is_control)
@@ -134,11 +185,17 @@ pub(super) fn build_message(
             .collect::<Result<Vec<_>, _>>()?;
         builder = builder.references(references.join(" "));
     }
-    let text = SinglePart::plain(compose.body.clone());
+    let body = body(compose, forward)?;
     let message = if compose.attachments.is_empty() {
-        builder.singlepart(text)
+        match body {
+            Body::Single(part) => builder.singlepart(part),
+            Body::Multi(part) => builder.multipart(part),
+        }
     } else {
-        let mut parts = MultiPart::mixed().singlepart(text);
+        let mut parts = match body {
+            Body::Single(part) => MultiPart::mixed().singlepart(part),
+            Body::Multi(part) => MultiPart::mixed().multipart(part),
+        };
         let mut total = 0usize;
         for attachment in &compose.attachments {
             let bytes = STANDARD

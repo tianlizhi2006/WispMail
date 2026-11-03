@@ -18,6 +18,7 @@ export function emptyMessage(): ComposeMessage {
     inReplyTo: null,
     references: [],
     attachments: [],
+    forward: null,
   };
 }
 
@@ -158,26 +159,45 @@ export function replyMessage(
   };
 }
 
-/** 转发：带原邮件头和正文，附件由调用方从原邮件取出后传入。不设置回复线程头。 */
+/**
+ * 转发：正文只放用户自己的文字；原邮件以 forward 引用，发送时由后端把原邮件头、
+ * HTML 排版和内嵌图片附在下方。普通附件由调用方取出后传入，不设置回复线程头。
+ */
 export function forwardMessage(
   detail: MessageDetail,
+  folder: string,
   attachments: ComposeAttachment[] = [],
 ): ComposeMessage {
-  const header = [
-    `发件人：${headerLine(detail.summary.from, 600) || "未知"}`,
-    `日期：${quotedDate(detail.summary.date) || "未知"}`,
-    `主题：${headerLine(detail.summary.subject, 900) || "（无主题）"}`,
-    `收件人：${headerLine(detail.summary.to.join(", "), 4000) || "未提供"}`,
-    ...(detail.cc.length
-      ? [`抄送：${headerLine(detail.cc.join(", "), 4000)}`]
-      : []),
-  ].join("\n");
+  const subject = headerLine(detail.summary.subject, 600) || "（无主题）";
+  const sender = headerLine(detail.summary.from, 600) || "未知发件人";
   return {
     ...emptyMessage(),
     subject: prefixedSubject(detail.summary.subject, "Fwd", FORWARD_SUBJECT),
-    body: `\n\n---------- 转发的邮件 ----------\n${header}\n\n${originalText(detail)}`,
     attachments,
+    forward: {
+      folder,
+      uid: detail.summary.uid,
+      uidValidity: detail.summary.uidValidity,
+      label: `${subject} · ${sender}`,
+    },
   };
+}
+
+/**
+ * 转发时随邮件附上的附件索引：被原 HTML 以 CID 内嵌的图片会随正文一起发送，
+ * 不再重复作为附件。
+ */
+export function forwardAttachmentIndexes(detail: MessageDetail): number[] {
+  const embedded = new Set(
+    detail.htmlBody
+      ? detail.inlineResources
+          .filter((resource) => resource.contentId)
+          .map((resource) => resource.attachmentIndex)
+      : [],
+  );
+  return detail.attachments
+    .map((attachment) => attachment.index)
+    .filter((index) => !embedded.has(index));
 }
 
 const REPLY_SUBJECT = /^(re|回复)\s*[:：]/i;
@@ -188,7 +208,9 @@ export function composeKind(
   message: ComposeMessage,
 ): "reply" | "forward" | "new" {
   if (message.inReplyTo) return "reply";
-  return FORWARD_SUBJECT.test(message.subject) ? "forward" : "new";
+  return message.forward || FORWARD_SUBJECT.test(message.subject)
+    ? "forward"
+    : "new";
 }
 
 /** 引用 / 转发头里的完整本地时间；无法解析时保留原文。 */
