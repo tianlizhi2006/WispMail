@@ -142,16 +142,120 @@
   overflow: auto;
 }
 .message-row {
-  display: block;
-  width: 100%;
-  border: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
-  text-align: left;
-  padding: 17px 17px 16px;
+  padding: 17px 17px 16px 11px;
 }
 .message-row:hover {
   background: var(--bg);
+}
+.message-row--checked {
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
+}
+.message-row-open {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.row-check {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.message-row:hover .row-check,
+.row-check:focus-visible,
+.message-list--selecting .row-check {
+  opacity: 1;
+}
+.batch-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px 14px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.batch-bar-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.batch-check-all {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.batch-check-all input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.batch-bar .spinner {
+  width: 12px;
+  height: 12px;
+}
+.batch-cancel {
+  font-size: 11px;
+}
+.batch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.batch-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+.batch-action:hover:not(:disabled) {
+  background: var(--bg-muted);
+}
+.batch-action:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.batch-action svg {
+  width: 14px;
+  height: 14px;
+}
+.batch-action--starred svg {
+  color: var(--star);
+  fill: var(--star);
+}
+.batch-action--danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.batch-move {
+  height: 28px;
+  border: 1px solid var(--border);
+  background: var(--surface);
 }
 .message-row--selected,
 .message-row--selected:hover {
@@ -668,7 +772,7 @@
     padding-inline: 15px;
   }
   .message-row {
-    padding-inline: 15px;
+    padding-inline: 9px 15px;
   }
   .message-row-top {
     gap: 6px;

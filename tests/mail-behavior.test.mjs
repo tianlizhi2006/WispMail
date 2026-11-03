@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   base64Size,
+  checkedMessages,
+  composeKind,
   createDraftWriter,
   createLruCache,
   createRequestGuard,
   emptyMessage,
+  forwardMessage,
   MAX_ATTACHMENT_BYTES,
   mergeMessagePages,
+  messageKey,
   moveTargets,
   parseAddresses,
   prepareSend,
@@ -15,6 +19,7 @@ import {
   replyMessage,
   selectionRemainsInPage,
   splitAddresses,
+  toggleChecked,
 } from "../src/features/messages/mailHelpers.ts";
 
 const row = (uid, uidValidity = 9) => ({
@@ -34,7 +39,10 @@ const row = (uid, uidValidity = 9) => ({
 test("removing the open message selects the next older one, then the newer one at the end", () => {
   const list = [row(5), row(4), row(3), row(2)];
   let result = removeFromList(list, 9, [4], list[1]);
-  assert.deepEqual(result.messages.map((m) => m.uid), [5, 3, 2]);
+  assert.deepEqual(
+    result.messages.map((m) => m.uid),
+    [5, 3, 2],
+  );
   assert.equal(result.next?.uid, 3);
   result = removeFromList(list, 9, [2], list[3]);
   assert.equal(result.next?.uid, 3, "last row falls back to the previous one");
@@ -51,6 +59,64 @@ test("removal ignores other UID generations and keeps an unaffected selection", 
     ["9:5", "8:4"],
   );
   assert.equal(result.next, undefined, "selection was not removed");
+});
+
+test("checkbox toggles one message and Shift selects the whole range from the anchor", () => {
+  const list = [row(5), row(4), row(3), row(2)];
+  let checked = toggleChecked(list, new Set(), list[0]);
+  assert.deepEqual([...checked], ["9:5"]);
+  checked = toggleChecked(list, checked, list[2], messageKey(list[0]));
+  assert.deepEqual([...checked].sort(), ["9:3", "9:4", "9:5"]);
+  checked = toggleChecked(list, checked, list[1]);
+  assert.deepEqual(
+    [...checked].sort(),
+    ["9:3", "9:5"],
+    "plain toggle unchecks",
+  );
+  // 锚点已不在列表中：退化为普通切换。
+  checked = toggleChecked(list, new Set(), list[3], "9:99");
+  assert.deepEqual([...checked], ["9:2"]);
+});
+
+test("checked messages follow the current list and ignore other UID generations", () => {
+  const list = [row(5), row(4), row(3)];
+  const checked = new Set(["9:5", "9:3", "9:1", "8:4"]);
+  assert.deepEqual(
+    checkedMessages(list, checked).map((m) => m.uid),
+    [5, 3],
+  );
+  assert.deepEqual(checkedMessages(list, new Set()), []);
+});
+
+test("forward keeps original headers, body and attachments without reply threading", () => {
+  const attachments = [
+    { name: "a.pdf", mimeType: "application/pdf", dataBase64: "AAECAw==" },
+  ];
+  const forwarded = forwardMessage(detail, attachments);
+  assert.equal(forwarded.subject, "Fwd: Project notes");
+  assert.deepEqual(forwarded.to, []);
+  assert.equal(forwarded.inReplyTo, null);
+  assert.deepEqual(forwarded.references, []);
+  assert.deepEqual(forwarded.attachments, attachments);
+  assert.match(forwarded.body, /---------- 转发的邮件 ----------/);
+  assert.match(forwarded.body, /主题：Project notes/);
+  assert.match(forwarded.body, /抄送：copy@example.com/);
+  assert.match(forwarded.body, /First line\nSecond line/);
+  assert.equal(composeKind(forwarded), "forward");
+  assert.equal(
+    composeKind(replyMessage(detail, "me@example.com", false)),
+    "reply",
+  );
+  assert.equal(composeKind(emptyMessage()), "new");
+  const again = forwardMessage({
+    ...detail,
+    summary: { ...detail.summary, subject: "转发：周报\r\nBcc: x@y.z" },
+  });
+  assert.equal(
+    again.subject,
+    "转发：周报  Bcc: x@y.z",
+    "no double prefix or header injection",
+  );
 });
 
 test("move targets exclude the current and non-selectable folders", () => {

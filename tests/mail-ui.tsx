@@ -239,6 +239,15 @@ async function mockInvoke(command: string, args: Args = {}): Promise<unknown> {
         return { target, needsPermanentDelete: false };
       }
       case "save_attachment": return null; // Simulate cancellation, never write a local file.
+      case "forward_attachments": {
+        const detail = bodies.get(bodyKey(accountId, folder, uid, validity)) ?? remoteDetail(accountId, folder, uid, validity);
+        const wanted = new Set(args.indices as number[]);
+        return {
+          attachments: detail.attachments.filter((attachment) => wanted.has(attachment.index))
+            .map((attachment) => ({ name: attachment.name, mimeType: attachment.mimeType, dataBase64: btoa("fixture") })),
+          skipped: [],
+        };
+      }
       case "open_email_link": updateDiagnostics(`模拟外部链接（未打开）：${String(args.url ?? "")}`); return null;
       case "get_draft": return clone(drafts.get(accountId) ?? null);
       case "save_draft": drafts.set(accountId, clone(args.draft as ComposeMessage)); return null;

@@ -31,7 +31,9 @@ export function MessageView(props: {
   attachmentBusy: boolean;
   organizeBusy: boolean;
   moveTargets: MailFolder[];
+  forwardBusy: boolean;
   onReply: (all: boolean) => void;
+  onForward: () => void;
   onToggleRead: () => void;
   onToggleFlag: () => void;
   onArchive: () => void;
@@ -149,12 +151,23 @@ export function MessageView(props: {
           >
             全部回复
           </button>
+          <button
+            type="button"
+            class="button button--secondary"
+            disabled={props.forwardBusy}
+            onClick={props.onForward}
+          >
+            <Icon name="forward" />
+            {props.forwardBusy ? "准备中…" : "转发"}
+          </button>
         </div>
         <div class="reader-actions">
           <button
             type="button"
             class="icon-button"
-            classList={{ "icon-button--starred": props.message.summary.flagged }}
+            classList={{
+              "icon-button--starred": props.message.summary.flagged,
+            }}
             aria-pressed={props.message.summary.flagged}
             aria-label={props.message.summary.flagged ? "取消星标" : "添加星标"}
             title={props.message.summary.flagged ? "取消星标" : "添加星标"}

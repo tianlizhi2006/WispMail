@@ -136,6 +136,12 @@ export interface ComposeMessage {
   attachments: ComposeAttachment[];
 }
 
+/** 转发时取出的原邮件附件；skipped 为超出发送限制或已损坏、未能附上的附件名。 */
+export interface ForwardAttachments {
+  attachments: ComposeAttachment[];
+  skipped: string[];
+}
+
 export interface SendResult {
   messageId: string;
   warning: string | null;

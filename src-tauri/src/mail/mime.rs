@@ -1,7 +1,10 @@
 use mail_parser::{Address, Encoding, Message, MessageParser, MessagePart, MimeHeaders, PartType};
 
+use base64::{Engine, engine::general_purpose::STANDARD};
+
 use super::{
-    AttachmentInfo, MAX_ATTACHMENT_BYTES, MAX_RAW_MESSAGE_BYTES, MessageDetail, MessageSummary,
+    AttachmentInfo, ForwardAttachments, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_COUNT,
+    MAX_RAW_MESSAGE_BYTES, MessageDetail, MessageSummary, OutgoingAttachment, valid_mime_type,
 };
 
 fn parsed(raw: &[u8]) -> Result<Message<'_>, String> {
@@ -215,6 +218,51 @@ pub fn attachment_bytes(raw: &[u8], index: usize) -> Result<(AttachmentInfo, Vec
     Ok((info, bytes))
 }
 
+/// 按显示顺序取出要转发的附件，直到达到发送限制（数量与总大小）。
+/// 放不下或已损坏的附件记入 `skipped`，由界面提示用户。
+pub fn forward_attachments(raw: &[u8], indices: &[usize]) -> Result<ForwardAttachments, String> {
+    let message = parsed(raw)?;
+    let mut result = ForwardAttachments::default();
+    let mut total = 0usize;
+    let mut seen = std::collections::HashSet::new();
+    for &index in indices.iter().take(256) {
+        if !seen.insert(index) {
+            continue;
+        }
+        let Some(part) = u32::try_from(index)
+            .ok()
+            .and_then(|index| message.attachment(index))
+        else {
+            continue;
+        };
+        let info = attachment_info(part, index);
+        let bytes = match decoded_attachment(raw, part) {
+            Ok(bytes)
+                if result.attachments.len() < MAX_ATTACHMENT_COUNT
+                    && total + bytes.len() <= MAX_ATTACHMENT_BYTES =>
+            {
+                bytes
+            }
+            _ => {
+                result.skipped.push(info.name);
+                continue;
+            }
+        };
+        total += bytes.len();
+        let mime_type = if valid_mime_type(&info.mime_type) {
+            info.mime_type
+        } else {
+            "application/octet-stream".into()
+        };
+        result.attachments.push(OutgoingAttachment {
+            name: info.name,
+            mime_type,
+            data_base64: STANDARD.encode(bytes),
+        });
+    }
+    Ok(result)
+}
+
 pub(super) fn decoded_attachment(raw: &[u8], part: &MessagePart<'_>) -> Result<Vec<u8>, String> {
     if part.is_encoding_problem {
         return Err("附件传输编码损坏，无法安全保存原文件。".into());
@@ -329,6 +377,24 @@ mod tests {
         let raw = b"Subject: broken\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nBody\r\n--b\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=broken.bin\r\nContent-Transfer-Encoding: base64\r\n\r\n%%%%\r\n--b--\r\n";
         assert!(attachment_bytes(raw, 0).is_err());
         assert!(detail(raw).text_body.contains("Body"));
+    }
+
+    #[test]
+    fn forwarding_keeps_valid_attachments_and_lists_the_rest_as_skipped() {
+        let big = STANDARD.encode(vec![7u8; MAX_ATTACHMENT_BYTES - 2]);
+        let raw = format!(
+            "Subject: fwd\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nBody\r\n\
+             --b\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=a.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\nAAECAw==\r\n\
+             --b\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=broken.bin\r\nContent-Transfer-Encoding: base64\r\n\r\n%%%%\r\n\
+             --b\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=big.bin\r\nContent-Transfer-Encoding: base64\r\n\r\n{big}\r\n--b--\r\n"
+        );
+        let result = forward_attachments(raw.as_bytes(), &[0, 0, 1, 2, 99]).unwrap();
+        assert_eq!(result.attachments.len(), 1);
+        assert_eq!(result.attachments[0].name, "a.pdf");
+        assert_eq!(result.attachments[0].mime_type, "application/pdf");
+        assert_eq!(result.attachments[0].data_base64, "AAECAw==");
+        // 损坏的附件和会让总大小超过 10 MB 的附件都提示给用户，不静默丢弃。
+        assert_eq!(result.skipped, vec!["broken.bin", "big.bin"]);
     }
 
     #[test]

@@ -2,6 +2,7 @@ import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import {
   clearDraft,
   errorMessage,
+  forwardAttachments,
   getDraft,
   getMessage,
   listCachedFolders,
@@ -15,9 +16,11 @@ import {
 } from "../../lib/api";
 import type {
   Account,
+  ComposeAttachment,
   ComposeMessage,
   MailFolder,
   MessageDetail,
+  MessageFlag,
   MessageRef,
   MessageSet,
   MessageSummary,
@@ -30,14 +33,18 @@ import { MessageView } from "../reader/MessageView";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
 import {
+  checkedMessages,
   createLruCache,
   createRequestGuard,
   emptyMessage,
+  forwardMessage,
   mergeMessagePages,
+  messageKey,
   moveTargets,
   removeFromList,
   replyMessage,
   selectionRemainsInPage,
+  toggleChecked,
 } from "./mailHelpers";
 import "./mail.css";
 
@@ -69,6 +76,8 @@ export function MailWorkspace(props: {
   const [attachmentBusy, setAttachmentBusy] = createSignal(false);
   const [organizeBusy, setOrganizeBusy] = createSignal(false);
   const [pendingDelete, setPendingDelete] = createSignal<MessageSet>();
+  const [checked, setChecked] = createSignal<ReadonlySet<string>>(new Set());
+  const [forwardBusy, setForwardBusy] = createSignal(false);
   const [notice, setNotice] = createSignal("");
   const [draftLoading, setDraftLoading] = createSignal(false);
   const [composer, setComposer] = createSignal<{
@@ -86,6 +95,8 @@ export function MailWorkspace(props: {
   const detailCache = createLruCache<string, MessageDetail>(DETAIL_CACHE_SIZE);
   const detailKey = (ref: MessageRef) =>
     `${ref.folder}\u0000${ref.uidValidity}\u0000${ref.uid}`;
+  /** Shift 连续选择的起点：最近一次勾选的邮件。 */
+  let checkAnchor: string | undefined;
   let alive = true;
   let conflictDialog!: HTMLDialogElement;
   let deleteDialog!: HTMLDialogElement;
@@ -168,6 +179,8 @@ export function MailWorkspace(props: {
     setReadBusy(false);
     setAttachmentBusy(false);
     setNotice("");
+    setChecked(new Set<string>());
+    checkAnchor = undefined;
     setFolder(next);
     setMessages([]);
     setUidValidity(null);
@@ -297,7 +310,12 @@ export function MailWorkspace(props: {
     const target = folder();
     if (!target) return;
     for (const uid of uids) {
-      const key = detailKey({ accountId, folder: target.name, uid, uidValidity });
+      const key = detailKey({
+        accountId,
+        folder: target.name,
+        uid,
+        uidValidity,
+      });
       const cached = detailCache.get(key);
       if (cached)
         detailCache.set(key, { ...cached, summary: transform(cached.summary) });
@@ -338,6 +356,11 @@ export function MailWorkspace(props: {
       );
     // 请求期间用户已切换文件夹：列表属于另一个文件夹，不能按 UID 删除。
     if (folder()?.name !== set.folder) return;
+    setChecked((current) => {
+      const next = new Set(current);
+      for (const uid of uids) next.delete(messageKey({ uid, uidValidity }));
+      return next;
+    });
     const { messages: remaining, next } = removeFromList(
       messages(),
       uidValidity,
@@ -368,17 +391,9 @@ export function MailWorkspace(props: {
     return known?.displayName || name;
   }
 
-  async function organize(action: OrganizeAction) {
-    const loaded = detail();
-    const target = folder();
-    if (!loaded || !target || organizeBusy()) return;
-    const { uid, uidValidity } = loaded.summary;
-    const set: MessageSet = {
-      accountId,
-      folder: target.name,
-      uidValidity,
-      uids: [uid],
-    };
+  /** 对一组邮件执行整理动作；单封（阅读区）和多选（列表）共用。 */
+  async function runOrganize(set: MessageSet, action: OrganizeAction) {
+    if (organizeBusy()) return;
     setOrganizeBusy(true);
     try {
       const result = await organizeMessages(set, action);
@@ -391,14 +406,16 @@ export function MailWorkspace(props: {
         return;
       }
       afterRemoved(set);
+      const what = set.uids.length > 1 ? `${set.uids.length} 封邮件` : "邮件";
+      const where = folderLabel(result.target);
       setNotice(
         action.type === "deletePermanently"
-          ? "邮件已永久删除。"
+          ? `${what}已永久删除。`
           : action.type === "trash"
-            ? `邮件已移到「${folderLabel(result.target)}」。`
+            ? `${what}已移到「${where}」。`
             : action.type === "archive"
-              ? `邮件已归档到「${folderLabel(result.target)}」。`
-              : `邮件已移动到「${folderLabel(result.target)}」。`,
+              ? `${what}已归档到「${where}」。`
+              : `${what}已移动到「${where}」。`,
       );
       // 归档时服务器可能新建了 Archive 文件夹，刷新左侧列表。
       if (
@@ -413,6 +430,74 @@ export function MailWorkspace(props: {
     }
   }
 
+  function organize(action: OrganizeAction) {
+    const loaded = detail();
+    const target = folder();
+    if (!loaded || !target) return;
+    const { uid, uidValidity } = loaded.summary;
+    void runOrganize(
+      { accountId, folder: target.name, uidValidity, uids: [uid] },
+      action,
+    );
+  }
+
+  /** 当前多选的邮件组成的集合；列表中的邮件始终属于同一 UIDVALIDITY。 */
+  function checkedSet(): MessageSet | undefined {
+    const target = folder();
+    const chosen = checkedMessages(messages(), checked());
+    if (!target || !chosen.length) return undefined;
+    const uidValidity = chosen[0].uidValidity;
+    return {
+      accountId,
+      folder: target.name,
+      uidValidity,
+      uids: chosen
+        .filter((message) => message.uidValidity === uidValidity)
+        .map((message) => message.uid),
+    };
+  }
+
+  function toggleCheck(message: MessageSummary, range: boolean) {
+    setChecked((current) =>
+      toggleChecked(
+        messages(),
+        current,
+        message,
+        range ? checkAnchor : undefined,
+      ),
+    );
+    checkAnchor = messageKey(message);
+  }
+
+  function checkAll(value: boolean) {
+    setChecked(new Set<string>(value ? messages().map(messageKey) : []));
+    checkAnchor = undefined;
+  }
+
+  async function batchFlag(flag: MessageFlag, value: boolean) {
+    const set = checkedSet();
+    if (!set || organizeBusy()) return;
+    setOrganizeBusy(true);
+    try {
+      await setMessageFlags(set, flag, value);
+      if (alive)
+        applySummary(
+          set.uids,
+          set.uidValidity,
+          flag === "seen" ? { unread: !value } : { flagged: value },
+        );
+    } catch (error) {
+      if (alive) setNotice(`批量更新未完成：${errorMessage(error)}`);
+    } finally {
+      if (alive) setOrganizeBusy(false);
+    }
+  }
+
+  function batchOrganize(action: OrganizeAction) {
+    const set = checkedSet();
+    if (set) void runOrganize(set, action);
+  }
+
   async function confirmPermanentDelete() {
     const set = pendingDelete();
     if (!set || organizeBusy()) return;
@@ -423,7 +508,11 @@ export function MailWorkspace(props: {
       deleteDialog.close();
       setPendingDelete(undefined);
       afterRemoved(set);
-      setNotice("邮件已永久删除。");
+      setNotice(
+        set.uids.length > 1
+          ? `${set.uids.length} 封邮件已永久删除。`
+          : "邮件已永久删除。",
+      );
     } catch (error) {
       if (alive) setNotice(`删除未完成：${errorMessage(error)}`);
     } finally {
@@ -544,6 +633,34 @@ export function MailWorkspace(props: {
     }
   }
 
+  async function forward() {
+    const loaded = detail();
+    const target = folder();
+    if (!loaded || !target || forwardBusy() || draftLoading() || composer())
+      return;
+    setForwardBusy(true);
+    try {
+      let attachments: ComposeAttachment[] = [];
+      if (loaded.attachments.length) {
+        const result = await forwardAttachments(
+          refFor(loaded.summary),
+          loaded.attachments.map((attachment) => attachment.index),
+        );
+        if (!alive) return;
+        attachments = result.attachments;
+        if (result.skipped.length)
+          setNotice(
+            `以下附件超出发送限制（合计 10 MB、最多 20 个）或已损坏，未随转发附上：${result.skipped.join("、")}`,
+          );
+      }
+      await compose(forwardMessage(loaded, attachments));
+    } catch (error) {
+      if (alive) setNotice(`无法转发：${errorMessage(error)}`);
+    } finally {
+      if (alive) setForwardBusy(false);
+    }
+  }
+
   async function replaceDraft() {
     const conflict = draftConflict();
     if (!conflict || draftLoading()) return;
@@ -643,7 +760,14 @@ export function MailWorkspace(props: {
         loadingMore={moreLoading()}
         hasMore={hasMore()}
         error={listError()}
+        checked={checked()}
+        batchBusy={organizeBusy()}
+        moveTargets={moveTargets(folders(), folder()?.name)}
         onSelect={(message) => void openMessage(message)}
+        onToggleCheck={toggleCheck}
+        onCheckAll={checkAll}
+        onBatchFlag={(flag, value) => void batchFlag(flag, value)}
+        onBatchOrganize={batchOrganize}
         onRefresh={() => {
           const target = folder();
           if (target) void loadMessages(target, false);
@@ -711,15 +835,19 @@ export function MailWorkspace(props: {
                   readBusy={readBusy()}
                   attachmentBusy={attachmentBusy()}
                   organizeBusy={organizeBusy()}
+                  forwardBusy={forwardBusy() || draftLoading()}
                   moveTargets={moveTargets(folders(), folder()?.name)}
                   onReply={(all) =>
-                    void compose(replyMessage(loaded(), props.account.email, all))
+                    void compose(
+                      replyMessage(loaded(), props.account.email, all),
+                    )
                   }
+                  onForward={() => void forward()}
                   onToggleRead={() => void toggleRead()}
                   onToggleFlag={() => void toggleFlag()}
-                  onArchive={() => void organize({ type: "archive" })}
-                  onDelete={() => void organize({ type: "trash" })}
-                  onMove={(target) => void organize({ type: "move", target })}
+                  onArchive={() => organize({ type: "archive" })}
+                  onDelete={() => organize({ type: "trash" })}
+                  onMove={(target) => organize({ type: "move", target })}
                   onSaveAttachment={(index) => void download(index)}
                 />
               )}
@@ -820,7 +948,11 @@ export function MailWorkspace(props: {
             <span class="delete-symbol">
               <Icon name="trash" />
             </span>
-            <h2 id="permanent-delete-title">永久删除这封邮件？</h2>
+            <h2 id="permanent-delete-title">
+              {(pendingDelete()?.uids.length ?? 1) > 1
+                ? `永久删除这 ${pendingDelete()!.uids.length} 封邮件？`
+                : "永久删除这封邮件？"}
+            </h2>
             <p class="muted">
               {folder()?.kind === "trash"
                 ? "邮件已在废纸篓中，删除后将从服务器上永久移除，无法恢复。"

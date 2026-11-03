@@ -9,7 +9,8 @@ use crate::{
     account::{Account, AccountCredentials, AccountService},
     commands::{AccountsState, ConnectionPermit, with_accounts},
     mail::{
-        self, ComposeMessage, MailFolder, MessageDetail, MessagePage, MessageSummary, SendResult,
+        self, ComposeMessage, ForwardAttachments, MailFolder, MessageDetail, MessagePage,
+        MessageSummary, SendResult,
     },
     storage::StoreError,
     sync,
@@ -576,6 +577,22 @@ pub async fn save_attachment(
     })
     .await
     .map_err(|_| "附件保存未完成，请重试。".to_string())?
+}
+
+/// 读取要随转发一起发送的原邮件附件（离线时使用已缓存的原文）。
+#[tauri::command]
+pub async fn forward_attachments(
+    account_id: String,
+    folder: String,
+    uid: u32,
+    uid_validity: u32,
+    indices: Vec<usize>,
+    state: tauri::State<'_, AccountsState>,
+) -> Result<ForwardAttachments, String> {
+    let (_, raw) = message_data(&state, account_id, folder, uid, uid_validity).await?;
+    tauri::async_runtime::spawn_blocking(move || mail::forward_attachments(&raw, &indices))
+        .await
+        .map_err(|_| "读取原邮件附件未完成，请重试。".to_string())?
 }
 
 fn external_email_url(value: &str) -> Result<String, String> {

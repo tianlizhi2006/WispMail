@@ -5,6 +5,7 @@ pub const MAX_RAW_MESSAGE_BYTES: usize = 20 * 1024 * 1024;
 pub const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
 pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 pub const MESSAGE_PAGE_SIZE: usize = 50;
+pub const MAX_ATTACHMENT_COUNT: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -77,6 +78,14 @@ pub struct OutgoingAttachment {
     pub data_base64: String,
 }
 
+/// 转发时带上的原邮件附件；超出发送限制或无法解码的附件只列出名称，不静默丢弃。
+#[derive(Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardAttachments {
+    pub attachments: Vec<OutgoingAttachment>,
+    pub skipped: Vec<String>,
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ComposeMessage {
@@ -103,6 +112,19 @@ pub struct MessagePage {
 pub struct SendResult {
     pub message_id: String,
     pub warning: Option<String>,
+}
+
+/// 发送时附件 MIME 类型必须是简单的 `type/subtype`，避免注入额外的邮件头参数。
+pub fn valid_mime_type(value: &str) -> bool {
+    value.len() <= 127
+        && value.split_once('/').is_some_and(|(top, sub)| {
+            !top.is_empty()
+                && !sub.is_empty()
+                && top
+                    .bytes()
+                    .chain(sub.bytes())
+                    .all(|c| c.is_ascii_alphanumeric() || b"!#$&^_.+-".contains(&c))
+        })
 }
 
 /// 草稿允许未输入完整的地址；两种模式都限制大小并拒绝邮件头注入。
@@ -141,8 +163,8 @@ pub fn validate_compose(message: &ComposeMessage, require_recipients: bool) -> R
             return Err("回复邮件标识无效。".into());
         }
     }
-    if message.attachments.len() > 20 {
-        return Err("单封邮件最多添加 20 个附件。".into());
+    if message.attachments.len() > MAX_ATTACHMENT_COUNT {
+        return Err(format!("单封邮件最多添加 {MAX_ATTACHMENT_COUNT} 个附件。"));
     }
     let mut decoded_total = 0usize;
     for attachment in &message.attachments {
@@ -152,18 +174,7 @@ pub fn validate_compose(message: &ComposeMessage, require_recipients: bool) -> R
         {
             return Err("附件名称为空、过长或包含控制字符。".into());
         }
-        let valid_mime = attachment.mime_type.len() <= 127
-            && attachment
-                .mime_type
-                .split_once('/')
-                .is_some_and(|(top, sub)| {
-                    !top.is_empty()
-                        && !sub.is_empty()
-                        && top
-                            .bytes()
-                            .chain(sub.bytes())
-                            .all(|c| c.is_ascii_alphanumeric() || b"!#$&^_.+-".contains(&c))
-                });
+        let valid_mime = valid_mime_type(&attachment.mime_type);
         if !valid_mime {
             return Err("附件类型无效。".into());
         }

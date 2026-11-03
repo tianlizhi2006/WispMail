@@ -1,4 +1,5 @@
 import type {
+  ComposeAttachment,
   ComposeMessage,
   MessageDetail,
   MessagePage,
@@ -122,23 +123,8 @@ export function replyMessage(
           ),
       )
     : [];
-  const cleanSubject = detail.summary.subject.replace(
-    /[\r\n\x00-\x1f\x7f]/g,
-    " ",
-  );
-  const subject = limitUtf8(
-    /^(re|回复)\s*:/i.test(cleanSubject) ? cleanSubject : `Re: ${cleanSubject}`,
-    900,
-  ).text;
-  const original = (
-    detail.textBody || "[原邮件为 HTML 内容，请在原邮件中查看。]"
-  ).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
-  const quoted = limitUtf8(original, 200_000);
-  const quote =
-    quoted.text +
-    (quoted.truncated
-      ? "\n[原文较长，已截断引用；完整内容请查看原邮件。]"
-      : "");
+  const subject = prefixedSubject(detail.summary.subject, "Re", REPLY_SUBJECT);
+  const quote = originalText(detail);
   // mail-parser 返回裸 ID；统一去掉可选尖括号，避免正常回复丢失线程头。
   const normalizeId = (id: string | null): string | null => {
     if (!id || /[\x00-\x20\x7f]/.test(id)) return null;
@@ -156,14 +142,8 @@ export function replyMessage(
       ...(messageId ? [messageId] : []),
     ]),
   ].slice(-100);
-  const quoteSender = limitUtf8(
-    detail.summary.from.replace(/[\r\n\x00-\x1f\x7f]/g, " "),
-    600,
-  ).text;
-  const quoteDate = limitUtf8(
-    detail.summary.date.replace(/[\r\n\x00-\x1f\x7f]/g, " "),
-    100,
-  ).text;
+  const quoteSender = headerLine(detail.summary.from, 600);
+  const quoteDate = quotedDate(detail.summary.date);
   return {
     ...emptyMessage(),
     to: uniqueTo,
@@ -176,6 +156,77 @@ export function replyMessage(
     inReplyTo: messageId,
     references,
   };
+}
+
+/** 转发：带原邮件头和正文，附件由调用方从原邮件取出后传入。不设置回复线程头。 */
+export function forwardMessage(
+  detail: MessageDetail,
+  attachments: ComposeAttachment[] = [],
+): ComposeMessage {
+  const header = [
+    `发件人：${headerLine(detail.summary.from, 600) || "未知"}`,
+    `日期：${quotedDate(detail.summary.date) || "未知"}`,
+    `主题：${headerLine(detail.summary.subject, 900) || "（无主题）"}`,
+    `收件人：${headerLine(detail.summary.to.join(", "), 4000) || "未提供"}`,
+    ...(detail.cc.length
+      ? [`抄送：${headerLine(detail.cc.join(", "), 4000)}`]
+      : []),
+  ].join("\n");
+  return {
+    ...emptyMessage(),
+    subject: prefixedSubject(detail.summary.subject, "Fwd", FORWARD_SUBJECT),
+    body: `\n\n---------- 转发的邮件 ----------\n${header}\n\n${originalText(detail)}`,
+    attachments,
+  };
+}
+
+const REPLY_SUBJECT = /^(re|回复)\s*[:：]/i;
+const FORWARD_SUBJECT = /^(fwd?|转发)\s*[:：]/i;
+
+/** 撰写窗口标题：回复带线程头；转发通过主题前缀识别，重新打开草稿时也能保持。 */
+export function composeKind(
+  message: ComposeMessage,
+): "reply" | "forward" | "new" {
+  if (message.inReplyTo) return "reply";
+  return FORWARD_SUBJECT.test(message.subject) ? "forward" : "new";
+}
+
+/** 引用 / 转发头里的完整本地时间；无法解析时保留原文。 */
+function quotedDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf())
+    ? headerLine(value, 100)
+    : date.toLocaleString("zh-CN", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+}
+
+function headerLine(value: string, maxBytes: number): string {
+  return limitUtf8(value.replace(/[\r\n\x00-\x1f\x7f]/g, " "), maxBytes).text;
+}
+
+function prefixedSubject(subject: string, prefix: string, existing: RegExp) {
+  const clean = headerLine(subject, 998);
+  return limitUtf8(existing.test(clean) ? clean : `${prefix}: ${clean}`, 900)
+    .text;
+}
+
+/** 引用或转发用的原文纯文本，限制大小以符合正文 1 MB 上限。 */
+function originalText(detail: MessageDetail): string {
+  const original = (
+    detail.textBody || "[原邮件为 HTML 内容，请在原邮件中查看。]"
+  ).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+  const limited = limitUtf8(original, 200_000);
+  return (
+    limited.text +
+    (limited.truncated
+      ? "\n[原文较长，已截断引用；完整内容请查看原邮件。]"
+      : "")
+  );
 }
 
 function limitUtf8(
@@ -278,6 +329,45 @@ export function removeFromList(
     .reverse()
     .find((message) => !gone(message));
   return { messages: remaining, next: after ?? before };
+}
+
+/** 多选状态的键：UID 只在同一 UIDVALIDITY 内唯一。 */
+export function messageKey(message: { uid: number; uidValidity: number }) {
+  return `${message.uidValidity}:${message.uid}`;
+}
+
+/**
+ * 更新多选集合。普通切换只翻转目标；范围选择把锚点到目标之间的邮件全部选中
+ * （锚点不在列表中时退化为普通切换）。
+ */
+export function toggleChecked(
+  messages: MessageSummary[],
+  checked: ReadonlySet<string>,
+  target: MessageSummary,
+  anchor?: string,
+): Set<string> {
+  const next = new Set(checked);
+  const key = messageKey(target);
+  const from = anchor
+    ? messages.findIndex((message) => messageKey(message) === anchor)
+    : -1;
+  const to = messages.findIndex((message) => messageKey(message) === key);
+  if (from >= 0 && to >= 0) {
+    for (let index = Math.min(from, to); index <= Math.max(from, to); index++)
+      next.add(messageKey(messages[index]));
+  } else if (next.has(key)) next.delete(key);
+  else next.add(key);
+  return next;
+}
+
+/** 当前列表中已勾选的邮件（列表变化后自动排除已不存在的项）。 */
+export function checkedMessages(
+  messages: MessageSummary[],
+  checked: ReadonlySet<string>,
+): MessageSummary[] {
+  return checked.size
+    ? messages.filter((message) => checked.has(messageKey(message)))
+    : [];
 }
 
 /** 可作为"移动到"目标的文件夹：可选择且不是当前文件夹。 */

@@ -9,6 +9,7 @@ import type { Account, ComposeMessage, SendResult } from "../../lib/types";
 import { Icon } from "../../ui/Icon";
 import {
   base64Size,
+  composeKind,
   createDraftWriter,
   formatSize,
   MAX_ATTACHMENT_BYTES,
@@ -202,7 +203,11 @@ export function Composer(props: {
         <div>
           <span class="eyebrow">{props.account.email}</span>
           <h2 id="composer-title">
-            {props.initial.inReplyTo ? "回复邮件" : "写邮件"}
+            {
+              { reply: "回复邮件", forward: "转发邮件", new: "写邮件" }[
+                composeKind(props.initial)
+              ]
+            }
           </h2>
         </div>
         <button

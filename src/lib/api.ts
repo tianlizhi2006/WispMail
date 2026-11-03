@@ -6,6 +6,7 @@ import type {
   ConnectionReport,
   DiscoveredConfig,
   ComposeMessage,
+  ForwardAttachments,
   MailFolder,
   MessageDetail,
   MessagePage,
@@ -127,6 +128,14 @@ export function saveAttachment(
   index: number,
 ): Promise<string | null> {
   return command("save_attachment", { ...ref, index });
+}
+
+/** 读取要随转发一起发送的原邮件附件（按给定的附件索引）。 */
+export function forwardAttachments(
+  ref: MessageRef,
+  indices: number[],
+): Promise<ForwardAttachments> {
+  return command("forward_attachments", { ...ref, indices });
 }
 
 /** 仅由正文中明确的链接点击触发，后端只允许 HTTP(S) 和 mailto。 */

@@ -4,5 +4,7 @@ mod mime;
 mod models;
 mod rendering;
 
-pub use mime::{attachment_bytes, parse_message, parse_summary, safe_attachment_name};
+pub use mime::{
+    attachment_bytes, forward_attachments, parse_message, parse_summary, safe_attachment_name,
+};
 pub use models::*;

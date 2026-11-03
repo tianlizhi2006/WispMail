@@ -14,6 +14,7 @@ type IconName =
   | "compose"
   | "download"
   | "reply"
+  | "forward"
   | "paperclip"
   | "inbox"
   | "star"
@@ -49,6 +50,7 @@ const paths: Record<IconName, () => JSX.Element> = {
     </>
   ),
   reply: () => <path d="m9 5-6 6 6 6M3 11h10c5 0 8 3 8 8" />,
+  forward: () => <path d="m15 5 6 6-6 6m6-6H11c-5 0-8 3-8 8" />,
   paperclip: () => (
     <path d="m9 12 6-6a3 3 0 0 1 4 4l-9 9a5 5 0 0 1-7-7L13 2m3 6-8 8a1 1 0 0 1-2-2l8-8" />
   ),
