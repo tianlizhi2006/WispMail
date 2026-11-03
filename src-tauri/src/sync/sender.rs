@@ -19,6 +19,7 @@ use crate::{
 use super::{
     connection::{ImapSession, open_imap, smtp_transport},
     mailbox::{OPERATION_TIMEOUT, bounded, finish, list_in_session},
+    organize::SpecialFolder,
 };
 
 pub async fn send_message(
@@ -76,24 +77,7 @@ pub(super) async fn archive_in_session(
     raw: &[u8],
 ) -> Result<(), String> {
     let folders = list_in_session(session).await?;
-    let sent = folders
-        .iter()
-        .find(|folder| folder.selectable && folder.kind == "sent")
-        .or_else(|| {
-            folders.iter().find(|folder| {
-                folder.selectable
-                    && matches!(
-                        folder.display_name.to_ascii_lowercase().as_str(),
-                        "sent"
-                            | "sent items"
-                            | "sent messages"
-                            | "inbox.sent"
-                            | "已发送"
-                            | "已发送邮件"
-                    )
-            })
-        });
-    let name = if let Some(folder) = sent {
+    let name = if let Some(folder) = SpecialFolder::Sent.find(&folders) {
         folder.name.clone()
     } else {
         session

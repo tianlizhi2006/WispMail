@@ -12,6 +12,7 @@
   --danger-soft: #fff0ee;
   --warning: #886124;
   --warning-soft: #fff7e7;
+  --star: #c8901a;
   color-scheme: light;
   font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
   font-size: 14px;
@@ -37,6 +38,7 @@
     --danger-soft: #412b2b;
     --warning: #dfbf80;
     --warning-soft: #393323;
+    --star: #e5b85a;
     color-scheme: dark;
   }
 }

@@ -147,3 +147,26 @@ export interface MessageRef {
   uid: number;
   uidValidity: number;
 }
+
+/** 同一文件夹、同一代 UID 下的一组邮件，用于批量操作。 */
+export interface MessageSet {
+  accountId: string;
+  folder: string;
+  uidValidity: number;
+  uids: number[];
+}
+
+export type MessageFlag = "seen" | "flagged";
+
+export type OrganizeAction =
+  | { type: "move"; target: string }
+  | { type: "archive" }
+  | { type: "trash" }
+  | { type: "deletePermanently" };
+
+export interface OrganizeResult {
+  /** 邮件所到的文件夹；永久删除或未执行时为 null。 */
+  target: string | null;
+  /** 没有废纸篓或邮件已在废纸篓：服务器未改动，需用户确认永久删除。 */
+  needsPermanentDelete: boolean;
+}

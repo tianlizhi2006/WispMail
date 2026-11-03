@@ -206,6 +206,38 @@ async function mockInvoke(command: string, args: Args = {}): Promise<unknown> {
         if (cachedBody) cachedBody.summary.unread = detail.summary.unread;
         return null;
       }
+      case "set_message_flags": {
+        assertOnline();
+        for (const id of args.uids as number[]) {
+          const detail = remoteDetail(accountId, folder, id, validity);
+          if (args.flag === "flagged") detail.summary.flagged = Boolean(args.value);
+          else detail.summary.unread = !args.value;
+          const summary = cache.get(boxKey(accountId, folder))?.messages.find((message) => message.uid === id && message.uidValidity === validity);
+          if (summary) Object.assign(summary, { flagged: detail.summary.flagged, unread: detail.summary.unread });
+          const cachedBody = bodies.get(bodyKey(accountId, folder, id, validity));
+          if (cachedBody) cachedBody.summary = clone(detail.summary);
+        }
+        return null;
+      }
+      case "organize_messages": {
+        assertOnline();
+        const action = args.action as { type: string; target?: string };
+        const uids = args.uids as number[];
+        for (const id of uids) remoteDetail(accountId, folder, id, validity);
+        // 夹具只有 INBOX 与 Sent，没有废纸篓：删除需要确认后永久删除。
+        if (action.type === "trash") return { target: null, needsPermanentDelete: true };
+        const list = source(accountId, folder);
+        const moved = list.filter((detail) => uids.includes(detail.summary.uid));
+        const kept = list.filter((detail) => !uids.includes(detail.summary.uid));
+        const mailbox = requireBox(accountId);
+        if (folder === "INBOX") mailbox.incoming = kept; else mailbox.sent = kept;
+        const target = action.type === "move" ? action.target! : action.type === "archive" ? "Sent" : null;
+        if (target === "Sent" && folder !== "Sent") mailbox.sent.unshift(...moved);
+        if (target === "INBOX" && folder !== "INBOX") mailbox.incoming.unshift(...moved);
+        const saved = cache.get(boxKey(accountId, folder));
+        if (saved) saved.messages = saved.messages.filter((message) => !uids.includes(message.uid));
+        return { target, needsPermanentDelete: false };
+      }
       case "save_attachment": return null; // Simulate cancellation, never write a local file.
       case "open_email_link": updateDiagnostics(`模拟外部链接（未打开）：${String(args.url ?? "")}`); return null;
       case "get_draft": return clone(drafts.get(accountId) ?? null);

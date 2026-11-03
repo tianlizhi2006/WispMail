@@ -17,9 +17,28 @@ use crate::{
 
 use super::{
     connection::{ImapSession, open_imap_with_connector, smtp_transport_with_parameters},
-    mailbox::{fetch_in_session, finish, list_in_session, set_read_in_session, sync_in_session},
+    mailbox::{fetch_in_session, finish, list_in_session, sync_in_session},
+    organize::{
+        MailFlag, MessageSet, delete_permanently_in_session, move_in_session, set_flag_in_session,
+    },
     sender::{archive_in_session, build_message, send_prepared},
 };
+
+async fn set_read_in_session(
+    session: &mut ImapSession,
+    folder: &str,
+    uid: u32,
+    uid_validity: u32,
+    read: bool,
+) -> Result<(), String> {
+    let uids = [uid];
+    let set = MessageSet {
+        folder,
+        uid_validity,
+        uids: &uids,
+    };
+    set_flag_in_session(session, set, MailFlag::Seen, read).await
+}
 
 const HEADER: &str = "From: Sender <sender@example.com>\r\nTo: reader@example.com\r\nSubject: Fixture mail\r\nDate: Mon, 2 Nov 2026 08:00:00 +0000\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n";
 
@@ -331,6 +350,162 @@ async fn explicit_read_change_stores_seen_and_verifies_server_state() {
     set_read_in_session(&mut session, "INBOX", 42, 77, true)
         .await
         .unwrap();
+    finish(session, Ok(())).await.unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn batch_star_is_rejected_unless_every_message_confirms_the_flag() {
+    for (fetched, ok) in [
+        (
+            "* 1 FETCH (UID 41 FLAGS (\\Flagged))\r\n* 2 FETCH (UID 42 FLAGS (\\Seen \\Flagged))\r\n",
+            true,
+        ),
+        // 42 已被其他客户端删除：STORE 返回 OK，但确认阶段只能看到 41。
+        ("* 1 FETCH (UID 41 FLAGS (\\Flagged))\r\n", false),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(scripted_imap(
+            listener,
+            vec![
+                ("SELECT \"INBOX\"".into(), selected(2, 77)),
+                (
+                    "UID STORE 41,42 +FLAGS.SILENT (\\Flagged)".into(),
+                    "{tag} OK stored\r\n".into(),
+                ),
+                (
+                    "UID FETCH 41,42 (UID FLAGS)".into(),
+                    format!("{fetched}{{tag}} OK flags\r\n"),
+                ),
+            ],
+        ));
+        let mut session = session(port).await;
+        let uids = [41, 42];
+        let set = MessageSet {
+            folder: "INBOX",
+            uid_validity: 77,
+            uids: &uids,
+        };
+        let result = set_flag_in_session(&mut session, set, MailFlag::Flagged, true).await;
+        assert_eq!(result.is_ok(), ok, "{result:?}");
+        finish(session, Ok(())).await.unwrap();
+        server.await.unwrap();
+    }
+}
+
+fn capability(extra: &str) -> String {
+    format!("* CAPABILITY IMAP4rev1{extra}\r\n{{tag}} OK capability\r\n")
+}
+
+#[tokio::test]
+async fn move_uses_atomic_uid_move_when_supported() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(scripted_imap(
+        listener,
+        vec![
+            ("CAPABILITY".into(), capability(" MOVE UIDPLUS")),
+            ("SELECT \"INBOX\"".into(), selected(2, 77)),
+            (
+                "UID MOVE 41,42 \"Archive\"".into(),
+                "{tag} OK moved\r\n".into(),
+            ),
+        ],
+    ));
+    let mut session = session(port).await;
+    let uids = [41, 42];
+    let set = MessageSet {
+        folder: "INBOX",
+        uid_validity: 77,
+        uids: &uids,
+    };
+    move_in_session(&mut session, set, "Archive").await.unwrap();
+    finish(session, Ok(())).await.unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn move_without_move_capability_copies_then_expunges_only_moved_uids() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(scripted_imap(
+        listener,
+        vec![
+            ("CAPABILITY".into(), capability(" UIDPLUS")),
+            ("SELECT \"INBOX\"".into(), selected(1, 77)),
+            ("UID COPY 42 \"Trash\"".into(), "{tag} OK copied\r\n".into()),
+            (
+                "UID STORE 42 +FLAGS.SILENT (\\Deleted)".into(),
+                "{tag} OK stored\r\n".into(),
+            ),
+            (
+                "UID EXPUNGE 42".into(),
+                "* 1 EXPUNGE\r\n{tag} OK expunged\r\n".into(),
+            ),
+        ],
+    ));
+    let mut session = session(port).await;
+    let uids = [42];
+    let set = MessageSet {
+        folder: "INBOX",
+        uid_validity: 77,
+        uids: &uids,
+    };
+    move_in_session(&mut session, set, "Trash").await.unwrap();
+    finish(session, Ok(())).await.unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_copy_never_marks_the_original_deleted() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(scripted_imap(
+        listener,
+        vec![
+            ("CAPABILITY".into(), capability("")),
+            ("SELECT \"INBOX\"".into(), selected(1, 77)),
+            (
+                "UID COPY 42 \"Trash\"".into(),
+                "{tag} NO [TRYCREATE] no such mailbox\r\n".into(),
+            ),
+        ],
+    ));
+    let mut session = session(port).await;
+    let uids = [42];
+    let set = MessageSet {
+        folder: "INBOX",
+        uid_validity: 77,
+        uids: &uids,
+    };
+    assert!(move_in_session(&mut session, set, "Trash").await.is_err());
+    finish(session, Ok(())).await.unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn organizing_checks_uidvalidity_before_changing_anything() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(scripted_imap(
+        listener,
+        vec![
+            ("CAPABILITY".into(), capability(" MOVE UIDPLUS")),
+            ("SELECT \"INBOX\"".into(), selected(1, 78)),
+        ],
+    ));
+    let mut session = session(port).await;
+    let uids = [42];
+    let set = MessageSet {
+        folder: "INBOX",
+        uid_validity: 77,
+        uids: &uids,
+    };
+    let error = delete_permanently_in_session(&mut session, set)
+        .await
+        .unwrap_err();
+    assert!(error.contains("UIDVALIDITY"));
     finish(session, Ok(())).await.unwrap();
     server.await.unwrap();
 }

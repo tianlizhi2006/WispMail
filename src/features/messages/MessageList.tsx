@@ -98,6 +98,9 @@ export function MessageList(props: {
                     classList={{ "unread-dot--visible": message.unread }}
                   />
                   <strong>{message.subject || "（无主题）"}</strong>
+                  <Show when={message.flagged}>
+                    <Icon name="star" class="row-star" />
+                  </Show>
                   <Show when={message.hasAttachments}>
                     <Icon name="paperclip" />
                   </Show>

@@ -372,11 +372,79 @@ impl Store {
         uid_validity: u32,
         read: bool,
     ) -> Result<(), StoreError> {
-        let mut summary = self
-            .get_message_summary(account_id, folder, uid, uid_validity)?
-            .ok_or(StoreError::MailNotFound)?;
-        summary.unread = !read;
-        self.connection.execute("UPDATE messages SET summary = ?5 WHERE account_id = ?1 AND folder = ?2 AND uid = ?3 AND uid_validity = ?4", params![account_id, folder, uid, uid_validity, serde_json::to_string(&summary)?])?;
+        let changed =
+            self.update_summaries(account_id, folder, uid_validity, &[uid], |summary| {
+                summary.unread = !read;
+            })?;
+        if changed == 0 {
+            return Err(StoreError::MailNotFound);
+        }
+        Ok(())
+    }
+
+    /// 在一个事务中修改一组邮件的摘要（已读、星标等），跳过已不在缓存中的邮件。
+    /// 返回实际更新的邮件数。
+    pub fn update_summaries(
+        &self,
+        account_id: &str,
+        folder: &str,
+        uid_validity: u32,
+        uids: &[u32],
+        change: impl Fn(&mut MessageSummary),
+    ) -> Result<usize, StoreError> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let mut changed = 0;
+        {
+            let mut select = transaction.prepare_cached(
+                "SELECT summary FROM messages WHERE account_id = ?1 AND folder = ?2 AND uid = ?3 AND uid_validity = ?4",
+            )?;
+            let mut update = transaction.prepare_cached(
+                "UPDATE messages SET summary = ?5 WHERE account_id = ?1 AND folder = ?2 AND uid = ?3 AND uid_validity = ?4",
+            )?;
+            for uid in uids {
+                let Some(json) = select
+                    .query_row(params![account_id, folder, uid, uid_validity], |row| {
+                        row.get::<_, String>(0)
+                    })
+                    .optional()?
+                else {
+                    continue;
+                };
+                let mut summary: MessageSummary = serde_json::from_str(&json)?;
+                change(&mut summary);
+                update.execute(params![
+                    account_id,
+                    folder,
+                    uid,
+                    uid_validity,
+                    serde_json::to_string(&summary)?
+                ])?;
+                changed += 1;
+            }
+        }
+        transaction.commit()?;
+        Ok(changed)
+    }
+
+    /// 邮件被移出或删除后从本地缓存移除。目标文件夹的新副本会在下次同步时出现
+    /// （服务器分配新 UID），这里不猜测新 UID。
+    pub fn remove_messages(
+        &self,
+        account_id: &str,
+        folder: &str,
+        uid_validity: u32,
+        uids: &[u32],
+    ) -> Result<(), StoreError> {
+        let transaction = self.connection.unchecked_transaction()?;
+        {
+            let mut delete = transaction.prepare_cached(
+                "DELETE FROM messages WHERE account_id = ?1 AND folder = ?2 AND uid_validity = ?3 AND uid = ?4",
+            )?;
+            for uid in uids {
+                delete.execute(params![account_id, folder, uid_validity, uid])?;
+            }
+        }
+        transaction.commit()?;
         Ok(())
     }
 
@@ -784,6 +852,49 @@ mod tests {
                 .unwrap()
                 .as_deref(),
             Some(RAW)
+        );
+    }
+
+    #[test]
+    fn batch_flag_update_skips_missing_messages_and_removal_drops_cached_bodies() {
+        let store = store();
+        store
+            .cache_folder_page(
+                "a",
+                "INBOX",
+                1,
+                &[summary(1, 1), summary(2, 1), summary(3, 1)],
+                Some(&[1, 2, 3]),
+            )
+            .unwrap();
+        store.cache_message_raw("a", "INBOX", 2, 1, RAW).unwrap();
+        let changed = store
+            .update_summaries("a", "INBOX", 1, &[1, 2, 99], |summary| {
+                summary.flagged = true
+            })
+            .unwrap();
+        assert_eq!(changed, 2);
+        let flagged = store
+            .get_message_detail("a", "INBOX", 2, 1)
+            .unwrap()
+            .unwrap();
+        assert!(
+            flagged.summary.flagged,
+            "cached detail reflects the new flag"
+        );
+        assert!(
+            !store
+                .get_message_summary("a", "INBOX", 3, 1)
+                .unwrap()
+                .unwrap()
+                .flagged
+        );
+        store.remove_messages("a", "INBOX", 1, &[1, 2]).unwrap();
+        assert!(store.get_message_raw("a", "INBOX", 2, 1).unwrap().is_none());
+        let page = store.list_messages("a", "INBOX", None).unwrap();
+        assert_eq!(
+            page.messages.iter().map(|m| m.uid).collect::<Vec<_>>(),
+            vec![3]
         );
     }
 

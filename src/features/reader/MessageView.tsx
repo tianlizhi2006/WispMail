@@ -7,7 +7,11 @@ import {
   onMount,
   Show,
 } from "solid-js";
-import type { InlineResource, MessageDetail } from "../../lib/types";
+import type {
+  InlineResource,
+  MailFolder,
+  MessageDetail,
+} from "../../lib/types";
 import { errorMessage, openEmailLink } from "../../lib/api";
 import { Icon } from "../../ui/Icon";
 import { formatMailDate, formatSize } from "../messages/mailHelpers";
@@ -25,8 +29,14 @@ export function MessageView(props: {
   message: MessageDetail;
   readBusy: boolean;
   attachmentBusy: boolean;
+  organizeBusy: boolean;
+  moveTargets: MailFolder[];
   onReply: (all: boolean) => void;
   onToggleRead: () => void;
+  onToggleFlag: () => void;
+  onArchive: () => void;
+  onDelete: () => void;
+  onMove: (target: string) => void;
   onSaveAttachment: (index: number) => void;
 }) {
   const [plainText, setPlainText] = createSignal(false);
@@ -140,18 +150,76 @@ export function MessageView(props: {
             全部回复
           </button>
         </div>
-        <button
-          type="button"
-          class="button button--text"
-          disabled={props.readBusy}
-          onClick={props.onToggleRead}
-        >
-          {props.readBusy
-            ? "更新中…"
-            : props.message.summary.unread
-              ? "标为已读"
-              : "标为未读"}
-        </button>
+        <div class="reader-actions">
+          <button
+            type="button"
+            class="icon-button"
+            classList={{ "icon-button--starred": props.message.summary.flagged }}
+            aria-pressed={props.message.summary.flagged}
+            aria-label={props.message.summary.flagged ? "取消星标" : "添加星标"}
+            title={props.message.summary.flagged ? "取消星标" : "添加星标"}
+            disabled={props.readBusy || props.organizeBusy}
+            onClick={props.onToggleFlag}
+          >
+            <Icon name="star" />
+          </button>
+          <button
+            type="button"
+            class="icon-button"
+            aria-label="归档"
+            title="归档"
+            disabled={props.organizeBusy}
+            onClick={props.onArchive}
+          >
+            <Icon name="archive" />
+          </button>
+          <button
+            type="button"
+            class="icon-button"
+            aria-label="删除"
+            title="删除（移到废纸篓）"
+            disabled={props.organizeBusy}
+            onClick={props.onDelete}
+          >
+            <Icon name="trash" />
+          </button>
+          <Show when={props.moveTargets.length}>
+            <label class="move-select" title="移动到文件夹">
+              <Icon name="folder" />
+              <span class="visually-hidden">移动到文件夹</span>
+              <select
+                disabled={props.organizeBusy}
+                value=""
+                onChange={(event) => {
+                  const target = event.currentTarget.value;
+                  event.currentTarget.value = "";
+                  if (target) props.onMove(target);
+                }}
+              >
+                <option value="">移动到…</option>
+                <For each={props.moveTargets}>
+                  {(folder) => (
+                    <option value={folder.name}>
+                      {folder.displayName || folder.name}
+                    </option>
+                  )}
+                </For>
+              </select>
+            </label>
+          </Show>
+          <button
+            type="button"
+            class="button button--text"
+            disabled={props.readBusy || props.organizeBusy}
+            onClick={props.onToggleRead}
+          >
+            {props.readBusy
+              ? "更新中…"
+              : props.message.summary.unread
+                ? "标为已读"
+                : "标为未读"}
+          </button>
+        </div>
       </div>
       <header class="reader-header">
         <h2>{props.message.summary.subject || "（无主题）"}</h2>

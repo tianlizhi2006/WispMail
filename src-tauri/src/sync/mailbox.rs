@@ -298,7 +298,7 @@ pub(super) async fn select_checked(
     select_validity(session, folder, expected).await
 }
 
-async fn select_validity(
+pub(super) async fn select_validity(
     session: &mut ImapSession,
     folder: &str,
     expected: u32,
@@ -366,73 +366,6 @@ pub(super) async fn fetch_in_session(
     raw.ok_or_else(|| "服务器没有返回邮件正文，邮件可能已被删除。".to_string())
 }
 
-pub async fn set_message_read(
-    pool: &ImapPool,
-    account: &Account,
-    credentials: &AccountCredentials,
-    folder: &str,
-    uid: u32,
-    expected_uid_validity: u32,
-    read: bool,
-) -> Result<(), String> {
-    validate_message_key(folder, uid, expected_uid_validity)?;
-    // 设置 \Seen 是幂等的，复用连接失败后重试一次不会产生副作用。
-    pool.run(account, credentials, |mut session| async move {
-        let result =
-            set_read_in_session(&mut session, folder, uid, expected_uid_validity, read).await;
-        (session, result)
-    })
-    .await
-}
-
-pub(super) async fn set_read_in_session(
-    session: &mut ImapSession,
-    folder: &str,
-    uid: u32,
-    expected: u32,
-    read: bool,
-) -> Result<(), String> {
-    select_checked(session, folder, uid, expected).await?;
-    {
-        let command = if read {
-            "+FLAGS.SILENT (\\Seen)"
-        } else {
-            "-FLAGS.SILENT (\\Seen)"
-        };
-        let stream = session
-            .uid_store(uid.to_string(), command)
-            .await
-            .map_err(|_| "无法修改邮件已读状态。".to_string())?;
-        pin_mut!(stream);
-        while stream
-            .try_next()
-            .await
-            .map_err(|_| "服务器拒绝修改已读状态。".to_string())?
-            .is_some()
-        {}
-    }
-    // STORE 对不存在的 UID 也可能返回 OK；确认目标仍存在并且标记确实已保存。
-    let stream = session
-        .uid_fetch(uid.to_string(), "(UID FLAGS)")
-        .await
-        .map_err(|_| "无法确认邮件已读状态。".to_string())?;
-    pin_mut!(stream);
-    let mut verified = false;
-    while let Some(fetch) = stream
-        .try_next()
-        .await
-        .map_err(|_| "无法确认邮件已读状态。".to_string())?
-    {
-        if fetch.uid == Some(uid) {
-            verified = fetch.flags().any(|flag| flag == Flag::Seen) == read;
-        }
-    }
-    if !verified {
-        return Err("邮件已不存在或服务器未保存已读标记，请刷新文件夹。".into());
-    }
-    Ok(())
-}
-
 fn validate_message_key(folder: &str, uid: u32, expected: u32) -> Result<(), String> {
     validate_folder(folder)?;
     if uid == 0 || expected == 0 {
@@ -441,7 +374,7 @@ fn validate_message_key(folder: &str, uid: u32, expected: u32) -> Result<(), Str
     Ok(())
 }
 
-fn validate_folder(folder: &str) -> Result<(), String> {
+pub(super) fn validate_folder(folder: &str) -> Result<(), String> {
     if folder.is_empty() || folder.len() > 4096 || folder.chars().any(char::is_control) {
         return Err("文件夹名称无效。".into());
     }

@@ -204,6 +204,48 @@
   margin-left: auto;
   color: var(--text-muted);
 }
+.message-row-subject svg + svg {
+  margin-left: 0;
+}
+.message-row-subject .row-star {
+  color: var(--star);
+  fill: var(--star);
+}
+.reader-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.icon-button--starred {
+  color: var(--star);
+}
+.icon-button--starred svg {
+  fill: var(--star);
+}
+.move-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 6px;
+  border-radius: 6px;
+  color: var(--text-muted);
+}
+.move-select:hover {
+  background: var(--bg-muted);
+}
+.move-select svg {
+  width: 17px;
+  height: 17px;
+}
+.move-select select {
+  max-width: 112px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  padding: 6px 0;
+  cursor: pointer;
+}
 .unread-dot {
   width: 5px;
   height: 5px;

@@ -15,8 +15,23 @@ type IconName =
   | "download"
   | "reply"
   | "paperclip"
-  | "inbox";
+  | "inbox"
+  | "star"
+  | "archive"
+  | "folder";
 const paths: Record<IconName, () => JSX.Element> = {
+  star: () => (
+    <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9L12 3Z" />
+  ),
+  archive: () => (
+    <>
+      <rect x="3" y="4" width="18" height="5" rx="1" />
+      <path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4" />
+    </>
+  ),
+  folder: () => (
+    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+  ),
   refresh: () => (
     <>
       <path d="M20 7v5h-5M4 17v-5h5" />

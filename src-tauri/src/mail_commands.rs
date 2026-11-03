@@ -381,25 +381,168 @@ pub async fn set_message_read(
     read: bool,
     state: tauri::State<'_, AccountsState>,
 ) -> Result<(), String> {
-    let (account, credentials, _permit) = connection(&state, account_id).await?;
-    sync::set_message_read(
-        &state.imap,
-        &account,
-        &credentials,
-        &folder,
-        uid,
+    apply_flag(
+        &state,
+        account_id,
+        folder,
         uid_validity,
+        vec![uid],
+        MessageFlag::Seen,
         read,
     )
-    .await?;
-    with_accounts(&state, move |service| {
+    .await
+}
+
+/// 前端可修改的邮件标记。
+#[derive(Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageFlag {
+    Seen,
+    Flagged,
+}
+
+fn checked_uids(mut uids: Vec<u32>) -> Result<Vec<u32>, String> {
+    uids.sort_unstable();
+    uids.dedup();
+    if uids.is_empty() || uids.len() > sync::MAX_BATCH || uids.contains(&0) {
+        return Err(format!(
+            "请选择 1 到 {} 封有效的邮件后再操作。",
+            sync::MAX_BATCH
+        ));
+    }
+    Ok(uids)
+}
+
+async fn apply_flag(
+    state: &AccountsState,
+    account_id: String,
+    folder: String,
+    uid_validity: u32,
+    uids: Vec<u32>,
+    flag: MessageFlag,
+    value: bool,
+) -> Result<(), String> {
+    let uids = checked_uids(uids)?;
+    let (account, credentials, _permit) = connection(state, account_id).await?;
+    let set = sync::MessageSet {
+        folder: &folder,
+        uid_validity,
+        uids: &uids,
+    };
+    let imap_flag = match flag {
+        MessageFlag::Seen => sync::MailFlag::Seen,
+        MessageFlag::Flagged => sync::MailFlag::Flagged,
+    };
+    sync::set_flags(&state.imap, &account, &credentials, set, imap_flag, value).await?;
+    with_accounts(state, move |service| {
         ensure_current(service, &account)?;
         service
             .store()
-            .set_message_read(&account.id, &folder, uid, uid_validity, read)
-            .map_err(|e| e.to_string())
+            .update_summaries(
+                &account.id,
+                &folder,
+                uid_validity,
+                &uids,
+                |summary| match flag {
+                    MessageFlag::Seen => summary.unread = !value,
+                    MessageFlag::Flagged => summary.flagged = value,
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
     })
     .await
+}
+
+/// 批量设置已读或星标，服务器确认后同步更新本地缓存。
+#[tauri::command]
+pub async fn set_message_flags(
+    account_id: String,
+    folder: String,
+    uid_validity: u32,
+    uids: Vec<u32>,
+    flag: MessageFlag,
+    value: bool,
+    state: tauri::State<'_, AccountsState>,
+) -> Result<(), String> {
+    apply_flag(&state, account_id, folder, uid_validity, uids, flag, value).await
+}
+
+/// 邮件整理动作。删除默认移到废纸篓；已在废纸篓或服务器没有废纸篓时，
+/// 前端须先向用户确认，再以 `deletePermanently` 调用。
+#[derive(Clone, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum OrganizeAction {
+    Move { target: String },
+    Archive,
+    Trash,
+    DeletePermanently,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizeResult {
+    /// 邮件被移到的文件夹；永久删除或未执行时为 null。
+    pub target: Option<String>,
+    /// 移到废纸篓不可行（没有废纸篓或邮件已在废纸篓中），服务器未做任何修改；
+    /// 界面应请用户确认是否永久删除。
+    pub needs_permanent_delete: bool,
+}
+
+#[tauri::command]
+pub async fn organize_messages(
+    account_id: String,
+    folder: String,
+    uid_validity: u32,
+    uids: Vec<u32>,
+    action: OrganizeAction,
+    state: tauri::State<'_, AccountsState>,
+) -> Result<OrganizeResult, String> {
+    let uids = checked_uids(uids)?;
+    let (account, credentials, _permit) = connection(&state, account_id).await?;
+    let set = sync::MessageSet {
+        folder: &folder,
+        uid_validity,
+        uids: &uids,
+    };
+    let pool = &state.imap;
+    let target = match action {
+        OrganizeAction::Move { target } => {
+            sync::move_messages(pool, &account, &credentials, set, &target).await?;
+            Some(target)
+        }
+        OrganizeAction::Archive => {
+            Some(sync::archive_messages(pool, &account, &credentials, set).await?)
+        }
+        OrganizeAction::Trash => {
+            match sync::trash_messages(pool, &account, &credentials, set).await? {
+                Some(target) => Some(target),
+                None => {
+                    return Ok(OrganizeResult {
+                        target: None,
+                        needs_permanent_delete: true,
+                    });
+                }
+            }
+        }
+        OrganizeAction::DeletePermanently => {
+            sync::delete_permanently(pool, &account, &credentials, set).await?;
+            None
+        }
+    };
+    // 服务器已完成操作；本地缓存清理失败只会让列表短暂多出几封，下次同步即修正。
+    let _ = with_accounts(&state, move |service| {
+        ensure_current(service, &account)?;
+        service
+            .store()
+            .remove_messages(&account.id, &folder, uid_validity, &uids)
+            .map_err(|e| e.to_string())
+    })
+    .await;
+    Ok(OrganizeResult {
+        target,
+        needs_permanent_delete: false,
+    })
 }
 
 #[tauri::command]

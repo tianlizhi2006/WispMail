@@ -252,6 +252,44 @@ export function selectionRemainsInPage(
   );
 }
 
+/**
+ * 从列表中移除已移走/删除的邮件，并选出接下来要打开的邮件：
+ * 优先同位置的下一封（更早的邮件），列表末尾时取上一封，列表清空时为 undefined。
+ */
+export function removeFromList(
+  messages: MessageSummary[],
+  uidValidity: number,
+  uids: number[],
+  selected?: MessageSummary,
+): { messages: MessageSummary[]; next?: MessageSummary } {
+  const removed = new Set(uids);
+  const gone = (message: MessageSummary) =>
+    message.uidValidity === uidValidity && removed.has(message.uid);
+  const remaining = messages.filter((message) => !gone(message));
+  if (!selected || !gone(selected)) return { messages: remaining };
+  const index = messages.findIndex(
+    (message) =>
+      message.uid === selected.uid &&
+      message.uidValidity === selected.uidValidity,
+  );
+  const after = messages.slice(index + 1).find((message) => !gone(message));
+  const before = messages
+    .slice(0, Math.max(0, index))
+    .reverse()
+    .find((message) => !gone(message));
+  return { messages: remaining, next: after ?? before };
+}
+
+/** 可作为"移动到"目标的文件夹：可选择且不是当前文件夹。 */
+export function moveTargets<F extends { name: string; selectable: boolean }>(
+  folders: F[],
+  current?: string,
+): F[] {
+  return folders.filter(
+    (folder) => folder.selectable && folder.name !== current,
+  );
+}
+
 /** 容量固定的最近使用缓存；Map 保持插入顺序，最早插入的即最久未用。 */
 export function createLruCache<K, V>(capacity: number) {
   const entries = new Map<K, V>();
@@ -271,6 +309,7 @@ export function createLruCache<K, V>(capacity: number) {
         entries.delete(entries.keys().next().value as K);
     },
     clear: () => entries.clear(),
+    delete: (key: K) => entries.delete(key),
   };
 }
 

@@ -103,4 +103,40 @@ impl ImapPool {
         }
         result
     }
+
+    /// 非幂等操作（移动、归档）：只执行一次，绝不重试。
+    ///
+    /// 复用的空闲连接先用 NOOP 确认存活，确认失败则改用新连接；一旦命令已发出，
+    /// 无论结果如何都不会再次发送，避免邮件被重复移动或复制。
+    pub(super) async fn run_once<T, F, Fut>(
+        &self,
+        account: &Account,
+        credentials: &AccountCredentials,
+        operation: F,
+    ) -> Result<T, String>
+    where
+        F: FnOnce(ImapSession) -> Fut,
+        Fut: Future<Output = (ImapSession, Result<T, String>)>,
+    {
+        let reused = match self.take(account) {
+            Some((mut session, _)) => {
+                matches!(timeout(CHECK_TIMEOUT, session.noop()).await, Ok(Ok(())))
+                    .then_some(session)
+            }
+            None => None,
+        };
+        let (session, result) = timeout(OPERATION_TIMEOUT, async {
+            let session = match reused {
+                Some(session) => session,
+                None => open_imap(account, credentials).await?,
+            };
+            Ok::<_, String>(operation(session).await)
+        })
+        .await
+        .map_err(|_| "邮件服务器操作超时，操作结果不确定，请刷新文件夹确认。".to_string())??;
+        if result.is_ok() {
+            self.put(account, session);
+        }
+        result
+    }
 }

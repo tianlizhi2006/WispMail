@@ -3,16 +3,80 @@ import test from "node:test";
 import {
   base64Size,
   createDraftWriter,
+  createLruCache,
   createRequestGuard,
   emptyMessage,
   MAX_ATTACHMENT_BYTES,
   mergeMessagePages,
+  moveTargets,
   parseAddresses,
   prepareSend,
+  removeFromList,
   replyMessage,
   selectionRemainsInPage,
   splitAddresses,
 } from "../src/features/messages/mailHelpers.ts";
+
+const row = (uid, uidValidity = 9) => ({
+  uid,
+  uidValidity,
+  subject: `m${uid}`,
+  from: "a@example.com",
+  to: [],
+  date: "",
+  unread: false,
+  flagged: false,
+  size: 1,
+  snippet: "",
+  hasAttachments: false,
+});
+
+test("removing the open message selects the next older one, then the newer one at the end", () => {
+  const list = [row(5), row(4), row(3), row(2)];
+  let result = removeFromList(list, 9, [4], list[1]);
+  assert.deepEqual(result.messages.map((m) => m.uid), [5, 3, 2]);
+  assert.equal(result.next?.uid, 3);
+  result = removeFromList(list, 9, [2], list[3]);
+  assert.equal(result.next?.uid, 3, "last row falls back to the previous one");
+  result = removeFromList([row(1)], 9, [1], row(1));
+  assert.deepEqual(result.messages, []);
+  assert.equal(result.next, undefined);
+});
+
+test("removal ignores other UID generations and keeps an unaffected selection", () => {
+  const list = [row(5), row(4, 8), row(3)];
+  const result = removeFromList(list, 9, [4, 3], list[0]);
+  assert.deepEqual(
+    result.messages.map((m) => `${m.uidValidity}:${m.uid}`),
+    ["9:5", "8:4"],
+  );
+  assert.equal(result.next, undefined, "selection was not removed");
+});
+
+test("move targets exclude the current and non-selectable folders", () => {
+  const folders = [
+    { name: "INBOX", selectable: true },
+    { name: "Parent", selectable: false },
+    { name: "Archive", selectable: true },
+  ];
+  assert.deepEqual(
+    moveTargets(folders, "INBOX").map((f) => f.name),
+    ["Archive"],
+  );
+});
+
+test("LRU cache evicts the least recently read entry", () => {
+  const cache = createLruCache(2);
+  cache.set("a", 1);
+  cache.set("b", 2);
+  cache.get("a");
+  cache.set("c", 3);
+  assert.equal(cache.get("b"), undefined);
+  assert.equal(cache.get("a"), 1);
+  assert.equal(cache.get("c"), 3);
+  cache.delete("a");
+  assert.equal(cache.get("a"), undefined);
+});
 
 const detail = {
   summary: {

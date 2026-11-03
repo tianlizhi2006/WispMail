@@ -60,6 +60,8 @@ pub fn run() {
             mail_commands::sync_folder,
             mail_commands::get_message,
             mail_commands::set_message_read,
+            mail_commands::set_message_flags,
+            mail_commands::organize_messages,
             mail_commands::save_attachment,
             mail_commands::open_email_link,
             mail_commands::get_draft,

@@ -10,6 +10,10 @@ import type {
   MessageDetail,
   MessagePage,
   MessageRef,
+  MessageSet,
+  MessageFlag,
+  OrganizeAction,
+  OrganizeResult,
   SendResult,
 } from "./types";
 
@@ -99,6 +103,23 @@ export function getMessage(ref: MessageRef): Promise<MessageDetail> {
 
 export function setMessageRead(ref: MessageRef, read: boolean): Promise<void> {
   return command("set_message_read", { ...ref, read });
+}
+
+/** 批量设置已读或星标；服务器确认每封邮件后才返回成功。 */
+export function setMessageFlags(
+  set: MessageSet,
+  flag: MessageFlag,
+  value: boolean,
+): Promise<void> {
+  return command("set_message_flags", { ...set, flag, value });
+}
+
+/** 移动、归档、移到废纸篓或永久删除；返回邮件所到的文件夹（永久删除为 null）。 */
+export function organizeMessages(
+  set: MessageSet,
+  action: OrganizeAction,
+): Promise<OrganizeResult> {
+  return command("organize_messages", { ...set, action });
 }
 
 export function saveAttachment(
